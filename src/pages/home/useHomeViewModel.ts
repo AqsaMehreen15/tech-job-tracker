@@ -18,12 +18,11 @@ export function useHomeViewModel() {
 
   const loadJobs = useCallback(
     async (currentFilter?: JobFilter) => {
+      const active = currentFilter ?? filter
       setLoading(true)
       setError(null)
 
       try {
-        const active = currentFilter ?? filter
-
         const fastResult = await JobRepository.getJobsFast(active)
         setJobs(fastResult.jobs)
         setActiveSource(fastResult.source)
@@ -37,6 +36,7 @@ export function useHomeViewModel() {
         const message = err instanceof Error ? err.message : String(err)
         setError(`Unable to load jobs: ${message}`)
         setJobs([])
+        setTotalJobs(0)
         setActiveSource('static')
       } finally {
         setLoading(false)
@@ -56,6 +56,11 @@ export function useHomeViewModel() {
     await loadJobs(updated)
   }
 
+  const updateFilters = async (updatedFilter: JobFilter) => {
+    setFilter(updatedFilter)
+    await loadJobs(updatedFilter)
+  }
+
   return {
     jobs,
     loading,
@@ -65,6 +70,7 @@ export function useHomeViewModel() {
     activeSource,
     totalJobs,
     handleSearch,
+    updateFilters,
     loadJobs,
   }
 }

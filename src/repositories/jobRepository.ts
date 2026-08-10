@@ -1,16 +1,26 @@
 import type { Job, JobFilter } from '../types/job'
-import { getJobsFromEngine, getFastJobsFromEngine } from '../services/jobEngine'
+import { getJobsFromEngine, getFastJobsFromEngine, mergeJobs } from '../services/jobEngine'
 
-const matches = (value: string, query: string): boolean =>
-  value.toLowerCase().includes(query.toLowerCase())
+const normalizeText = (value?: string): string =>
+  String(value ?? '')
+    .toLowerCase()
+    .trim()
+    .replace(/[-_]+/g, ' ')
+    .replace(/\s+/g, ' ')
+
+const matches = (value: string, query: string): boolean => {
+  const normalizedValue = normalizeText(value)
+  const normalizedQuery = normalizeText(query)
+  return normalizedValue.includes(normalizedQuery)
+}
 
 const flattenTags = (job: Job): string[] => {
   const raw = (job as any).tags
-  if (Array.isArray(raw)) return raw.map((tag) => String(tag).toLowerCase())
+  if (Array.isArray(raw)) return raw.map((tag) => normalizeText(String(tag)))
   if (typeof raw === 'string') {
     return raw
       .split(/[,;|]/)
-      .map((tag) => tag.trim().toLowerCase())
+      .map((tag) => normalizeText(tag))
       .filter(Boolean)
   }
   return []
@@ -18,86 +28,108 @@ const flattenTags = (job: Job): string[] => {
 
 const getLocationCity = (query: string): string => {
   const cities = ['karachi', 'lahore', 'islamabad', 'rawalpindi', 'peshawar', 'multan']
-  const normalized = query.toLowerCase()
+  const normalized = normalizeText(query)
   return cities.find((city) => normalized.includes(city)) ?? ''
 }
 
+const getJobText = (job: Job): string => {
+  const fields = [
+    job.title,
+    job.company_name,
+    job.category,
+    job.candidate_required_location,
+    job.description,
+    job.job_type,
+    (job as any).type,
+  ]
+
+  const tagText = flattenTags(job).join(' ')
+  return normalizeText([...fields.filter(Boolean), tagText].join(' '))
+}
+
+const getTypeKeywords = (filterValue: string): string[] => {
+  const normalized = normalizeText(filterValue)
+  if (normalized.includes('intern')) {
+    return ['intern', 'internship', 'trainee', 'fresh', 'graduate', 'entry level']
+  }
+  if (normalized.includes('part')) {
+    return ['part', 'part-time', 'part time', 'temporary', 'gig']
+  }
+  if (normalized.includes('contract')) {
+    return ['contract', 'freelance', 'temporary', 'short-term']
+  }
+  if (normalized.includes('remote')) {
+    return ['remote', 'work from home', 'wfh', 'distributed', 'anywhere']
+  }
+  if (normalized.includes('full')) {
+    return ['full', 'full-time', 'full time', 'permanent']
+  }
+  return [normalized]
+}
+
+const matchesJobType = (job: Job, filterValue: string): boolean => {
+  if (!filterValue || filterValue === 'all') return true
+  const normalizedFilter = normalizeText(filterValue)
+  const keywords = getTypeKeywords(filterValue)
+  const jobText = getJobText(job)
+  return keywords.some((keyword) => jobText.includes(keyword)) || jobText.includes(normalizedFilter)
+}
+
+const matchesCategory = (job: Job, filterValue: string): boolean => {
+  if (!filterValue || filterValue === 'all') return true
+  const normalizedFilter = normalizeText(filterValue)
+  const jobText = getJobText(job)
+  return jobText.includes(normalizedFilter)
+}
+
+const matchesSearchQuery = (job: Job, query: string): boolean => {
+  if (!query) return true
+  const normalizedQuery = normalizeText(query)
+  const jobText = getJobText(job)
+  return jobText.includes(normalizedQuery)
+}
+
 const filterJobs = (jobs: Job[], filters: JobFilter): Job[] => {
-  const query = (filters.searchQuery || '').trim().toLowerCase()
-  const categoryFilter = (filters.category || '').trim().toLowerCase()
-  const jobTypeFilter = (filters.jobType || '').trim().toLowerCase()
+  const query = normalizeText(filters.searchQuery)
+  const categoryFilter = normalizeText(filters.category)
+  const jobTypeFilter = normalizeText(filters.jobType)
   const cityInQuery = getLocationCity(query)
   const remainingQuery = cityInQuery ? query.replace(cityInQuery, '').trim() : query
 
-  return jobs.filter((job) => {
-    const title = (job.title || '').toLowerCase()
-    const company = (job.company_name || '').toLowerCase()
-    const category = (job.category || '').toLowerCase()
-    const location = (job.candidate_required_location || '').toLowerCase()
-    const description = (job.description || '').toLowerCase()
-    const jobType = (job.job_type || '').toLowerCase()
-    const tags = flattenTags(job)
-
-    if (cityInQuery && !location.includes(cityInQuery)) {
+  const primaryMatches = jobs.filter((job) => {
+    if (cityInQuery && !normalizeText(job.candidate_required_location).includes(cityInQuery)) {
       return false
     }
 
-    if (categoryFilter && categoryFilter !== 'all') {
-      if (!(
-        category === categoryFilter ||
-        title.includes(categoryFilter) ||
-        company.includes(categoryFilter) ||
-        tags.some((tag) => tag.includes(categoryFilter))
-      )) {
-        return false
-      }
+    if (!matchesCategory(job, categoryFilter)) {
+      return false
     }
 
-    if (jobTypeFilter && jobTypeFilter !== 'all') {
-      const normalizedJobType = jobTypeFilter.replace(/[^a-z]/g, '')
-      const matchesType = (() => {
-        if (!normalizedJobType) return true
-        if (normalizedJobType.includes('intern')) {
-          return jobType.includes('intern') || title.includes('intern') || tags.some((tag) => tag.includes('intern'))
-        }
-        if (normalizedJobType.includes('remote')) {
-          return jobType.includes('remote') || location.includes('remote') || tags.some((tag) => tag.includes('remote'))
-        }
-        if (normalizedJobType.includes('part')) {
-          return jobType.includes('part') || title.includes('part') || tags.some((tag) => tag.includes('part'))
-        }
-        if (normalizedJobType.includes('full')) {
-          return jobType.includes('full') || title.includes('full') || tags.some((tag) => tag.includes('full'))
-        }
-        if (normalizedJobType.includes('contract')) {
-          return jobType.includes('contract') || title.includes('contract') || tags.some((tag) => tag.includes('contract'))
-        }
-        return (
-          jobType.includes(jobTypeFilter) ||
-          title.includes(jobTypeFilter) ||
-          tags.some((tag) => tag.includes(jobTypeFilter))
-        )
-      })()
-
-      if (!matchesType) {
-        return false
-      }
+    if (!matchesJobType(job, jobTypeFilter)) {
+      return false
     }
 
-    if (remainingQuery) {
-      const queryMatches =
-        title.includes(remainingQuery) ||
-        company.includes(remainingQuery) ||
-        category.includes(remainingQuery) ||
-        location.includes(remainingQuery) ||
-        description.includes(remainingQuery) ||
-        tags.some((tag) => tag.includes(remainingQuery))
-
-      if (!queryMatches) return false
+    if (!matchesSearchQuery(job, remainingQuery)) {
+      return false
     }
 
     return true
   })
+
+  if (primaryMatches.length >= 5) {
+    return primaryMatches
+  }
+
+  const broadened = jobs.filter((job) => {
+    const jobText = getJobText(job)
+    const categoryMatch = categoryFilter && categoryFilter !== 'all' ? jobText.includes(categoryFilter) : true
+    const typeMatch = jobTypeFilter && jobTypeFilter !== 'all' ? matchesJobType(job, jobTypeFilter) : true
+    const queryMatch = remainingQuery ? jobText.includes(remainingQuery) : true
+    const tagMatch = flattenTags(job).some((tag) => categoryMatch && typeMatch && tag.includes(categoryFilter))
+    return categoryMatch && typeMatch && queryMatch && (tagMatch || jobText.includes(categoryFilter) || jobText.includes(jobTypeFilter))
+  })
+
+  return primaryMatches.length > 0 ? mergeJobs([...primaryMatches, ...broadened]) : mergeJobs(broadened)
 }
 
 export class JobRepository {

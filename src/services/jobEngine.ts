@@ -37,7 +37,7 @@ const normalizeJob = (job: Job): Job => {
   }
 }
 
-const mergeJobs = (jobs: Job[]): Job[] => {
+export const mergeJobs = (jobs: Job[]): Job[] => {
   const seen = new Map<string, Job>()
   for (const job of jobs.map(normalizeJob)) {
     const key = normalizeJobId(job)

@@ -8,7 +8,7 @@ export interface HomeViewProps {
 }
 
 export const HomeView: React.FC<HomeViewProps> = ({ onBookmark }) => {
-  const { jobs, loading, error, filter, setFilter, loadJobs, handleSearch, activeSource, totalJobs } = useHomeViewModel()
+  const { jobs, loading, error, filter, setFilter, loadJobs, handleSearch, updateFilters, activeSource, totalJobs } = useHomeViewModel()
 
   const styles: { [k: string]: React.CSSProperties } = {
     page: { padding: 24 },
@@ -33,19 +33,19 @@ export const HomeView: React.FC<HomeViewProps> = ({ onBookmark }) => {
   const onCategoryChange = (value: string) => {
     const updated = { ...filter, category: value }
     setFilter(updated)
-    void loadJobs(updated)
+    void updateFilters(updated)
   }
 
   const onJobTypeChange = (value: string) => {
     const updated = { ...filter, jobType: value }
     setFilter(updated)
-    void loadJobs(updated)
+    void updateFilters(updated)
   }
 
   const onResetFilters = () => {
     const reset = { searchQuery: '', category: 'all', jobType: 'all' }
     setFilter(reset)
-    void loadJobs(reset)
+    void updateFilters(reset)
   }
 
   return (
@@ -66,7 +66,11 @@ export const HomeView: React.FC<HomeViewProps> = ({ onBookmark }) => {
             placeholder="Search by title, company or category"
             style={styles.input}
             value={filter.searchQuery}
-            onChange={(e) => setFilter({ ...filter, searchQuery: e.target.value })}
+            onChange={(e) => {
+              const updated = { ...filter, searchQuery: e.target.value }
+              setFilter(updated)
+              void updateFilters(updated)
+            }}
           />
 
           <select
