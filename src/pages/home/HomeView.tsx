@@ -8,7 +8,7 @@ export interface HomeViewProps {
 }
 
 export const HomeView: React.FC<HomeViewProps> = ({ onBookmark }) => {
-  const { jobs, loading, error, filter, setFilter, loadJobs, handleSearch } = useHomeViewModel()
+  const { jobs, loading, error, filter, setFilter, loadJobs, handleSearch, activeSource, totalJobs } = useHomeViewModel()
 
   const styles: { [k: string]: React.CSSProperties } = {
     page: { padding: 24 },
@@ -53,6 +53,12 @@ export const HomeView: React.FC<HomeViewProps> = ({ onBookmark }) => {
       <header style={styles.hero}>
         <h1 style={styles.title}>Find Your Next Tech Job & Internship</h1>
         <p style={styles.subtitle}>Search remote-friendly roles across engineering, design, marketing and more.</p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8, flexWrap: 'wrap' }}>
+          <strong style={{ color: '#0f172a' }}>{totalJobs} jobs available</strong>
+          <span style={{ padding: '4px 10px', background: '#e0f2fe', borderRadius: 999, color: '#0369a1', fontSize: 12 }}>
+            Source: {activeSource}
+          </span>
+        </div>
 
         <form onSubmit={onSubmit} style={styles.form} aria-label="job-search-form">
           <input
@@ -108,9 +114,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onBookmark }) => {
         </form>
       </header>
 
-      {loading ? (
-        <div style={styles.loading}>Loading jobs…</div>
-      ) : error ? (
+      {error ? (
         <div style={styles.error} role="alert">
           <div>{error}</div>
           <div style={{ marginTop: 8 }}>
@@ -119,14 +123,21 @@ export const HomeView: React.FC<HomeViewProps> = ({ onBookmark }) => {
             </button>
           </div>
         </div>
+      ) : jobs.length === 0 && loading ? (
+        <div style={styles.loading}>Loading jobs…</div>
       ) : jobs.length === 0 ? (
         <div style={styles.empty}>No jobs found. Try adjusting your search or filters.</div>
       ) : (
-        <div style={styles.grid}>
-          {jobs.map((job) => (
-            <JobCard key={job.id} job={job} onBookmark={onBookmark} />
-          ))}
-        </div>
+        <>
+          <div style={styles.grid}>
+            {jobs.map((job) => (
+              <JobCard key={job.id} job={job} onBookmark={onBookmark} />
+            ))}
+          </div>
+          {loading && (
+            <div style={{ ...styles.loading, marginTop: 16 }}>Loading additional jobs…</div>
+          )}
+        </>
       )}
     </section>
   )

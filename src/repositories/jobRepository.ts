@@ -1,5 +1,5 @@
 import type { Job, JobFilter } from '../types/job'
-import { getJobsFromEngine } from '../services/jobEngine'
+import { getJobsFromEngine, getFastJobsFromEngine } from '../services/jobEngine'
 
 const matches = (value: string, query: string): boolean =>
   value.toLowerCase().includes(query.toLowerCase())
@@ -101,6 +101,14 @@ const filterJobs = (jobs: Job[], filters: JobFilter): Job[] => {
 }
 
 export class JobRepository {
+  static async getJobsFast(filters: JobFilter): Promise<{ jobs: Job[]; source: string }> {
+    const { jobs, source } = await getFastJobsFromEngine()
+    return {
+      jobs: filterJobs(jobs, filters),
+      source,
+    }
+  }
+
   static async getJobs(filters: JobFilter): Promise<{ jobs: Job[]; source: string }> {
     const { jobs, source } = await getJobsFromEngine()
     return {

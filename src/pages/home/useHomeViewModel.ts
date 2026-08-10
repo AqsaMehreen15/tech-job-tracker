@@ -14,6 +14,8 @@ export function useHomeViewModel() {
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<JobFilter>(INITIAL_FILTER)
   const [activeSource, setActiveSource] = useState<string>('static')
+  const [totalJobs, setTotalJobs] = useState<number>(0)
+  const [fastJobs, setFastJobs] = useState<Job[]>([])
 
   const loadJobs = useCallback(
     async (currentFilter?: JobFilter) => {
@@ -22,10 +24,17 @@ export function useHomeViewModel() {
 
       try {
         const active = currentFilter ?? filter
-        const { jobs: fetchedJobs, source } = await JobRepository.getJobs(active)
 
-        setJobs(fetchedJobs)
-        setActiveSource(source)
+        const fastResult = await JobRepository.getJobsFast(active)
+        setFastJobs(fastResult.jobs)
+        setJobs(fastResult.jobs)
+        setActiveSource(fastResult.source)
+        setTotalJobs(fastResult.jobs.length)
+
+        const fullResult = await JobRepository.getJobs(active)
+        setJobs(fullResult.jobs)
+        setActiveSource(fullResult.source)
+        setTotalJobs(fullResult.jobs.length)
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err)
         setError(`Unable to load jobs: ${message}`)
@@ -56,7 +65,9 @@ export function useHomeViewModel() {
     filter,
     setFilter,
     activeSource,
+    totalJobs,
     handleSearch,
+    loadJobs,
   }
 }
 

@@ -54,6 +54,13 @@ const safeFetchRemotiveJobs = async (): Promise<Job[]> => {
   }
 }
 
+export async function getFastJobsFromEngine(): Promise<{ jobs: Job[]; source: string }> {
+  const [customJobs, remotiveJobs] = await Promise.all([safeFetchCustomJobs(), safeFetchRemotiveJobs()])
+  const source = customJobs.length > 0 ? 'firebase' : remotiveJobs.length > 0 ? 'remotive' : 'static'
+  const jobs = mergeJobs([...customJobs, ...remotiveJobs, ...pakistanJobs])
+  return { jobs, source }
+}
+
 const isCacheFresh = (timestamp: unknown): boolean => {
   if (!timestamp) return false
   if (timestamp instanceof Timestamp) {
@@ -127,10 +134,12 @@ const fetchCachedJSearchJobs = async (): Promise<Job[]> => {
 }
 
 export async function getJobsFromEngine(): Promise<{ jobs: Job[]; source: string }> {
-  const customJobs = await safeFetchCustomJobs()
-  const rozeeJobs = await fetchRozeeJobs()
-  const remotiveJobs = await safeFetchRemotiveJobs()
-  const jsearchJobs = await fetchCachedJSearchJobs()
+  const [customJobs, rozeeJobs, remotiveJobs, jsearchJobs] = await Promise.all([
+    safeFetchCustomJobs(),
+    fetchRozeeJobs(),
+    safeFetchRemotiveJobs(),
+    fetchCachedJSearchJobs(),
+  ])
 
   let source = 'static'
   if (customJobs.length > 0) {
