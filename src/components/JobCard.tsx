@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import type { Job } from '../types/job'
 import ApplyModal from './ApplyModal'
+import JobDetailsModal from './JobDetailsModal'
 
 export interface JobCardProps {
   job: Job
@@ -67,6 +68,12 @@ export const JobCard: React.FC<JobCardProps> = ({ job, onBookmark, isBookmarked 
   const [imageError, setImageError] = useState(false)
   const initial = job.company_name ? job.company_name.charAt(0).toUpperCase() : 'C'
   const [applyOpen, setApplyOpen] = useState(false)
+  const [detailsOpen, setDetailsOpen] = useState(false)
+
+  const handleApplyFromDetails = () => {
+    setDetailsOpen(false)
+    setApplyOpen(true)
+  }
 
   return (
     <article style={styles.card} aria-labelledby={`job-${job.id}-title`}>
@@ -125,6 +132,13 @@ export const JobCard: React.FC<JobCardProps> = ({ job, onBookmark, isBookmarked 
             Apply Now
           </button>
 
+          <button
+            onClick={() => setDetailsOpen(true)}
+            style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid rgba(3,105,161,0.12)', background: 'transparent', color: '#0369a1', cursor: 'pointer' }}
+          >
+            View Details
+          </button>
+
           <a href={job.url} target="_blank" rel="noopener noreferrer" style={{ ...styles.applyLink, marginLeft: 8 }}>
             View Job Site
           </a>
@@ -135,6 +149,15 @@ export const JobCard: React.FC<JobCardProps> = ({ job, onBookmark, isBookmarked 
             jobTitle={job.title}
             companyName={job.company_name}
             jobId={job.id}
+          />
+
+          <JobDetailsModal
+            isOpen={detailsOpen}
+            onClose={() => setDetailsOpen(false)}
+            job={job}
+            onApplyClick={handleApplyFromDetails}
+            onToggleSave={() => onBookmark && onBookmark(job)}
+            isSaved={!!isBookmarked}
           />
         </div>
       </div>
