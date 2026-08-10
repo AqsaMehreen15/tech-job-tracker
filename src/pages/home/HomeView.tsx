@@ -1,5 +1,5 @@
 import React from 'react'
-import { useHomeViewModel } from './useHomeViewModel'
+import useHomeViewModel from './useHomeViewModel'
 import JobCard from '../../components/JobCard'
 import type { Job } from '../../types/job'
 
