@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app'
 import { getAuth } from 'firebase/auth'
-import { getDatabase, ref, set, get, remove } from 'firebase/database'
+import { getDatabase, ref, set, get, remove, push } from 'firebase/database'
 import type { Job } from '../types/job'
 
 export interface ApplicationData {
@@ -101,6 +101,47 @@ export async function submitJobApplication(
   }
 }
 
+/**
+ * Post a new job into the community 'jobs' node.
+ * The function generates an id and sets the publication_date automatically.
+ */
+export async function postNewJob(
+  jobData: Omit<Job, 'id' | 'publication_date'>
+): Promise<Job> {
+  try {
+    const jobsRef = ref(db, 'jobs')
+    const newRef = push(jobsRef)
+    const key = newRef.key ?? `job-${Date.now()}`
+    const payload: Job = {
+      ...jobData,
+      id: key,
+      publication_date: new Date().toISOString(),
+    }
+    await set(newRef, payload)
+    return payload
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`Failed to post job: ${message}`)
+  }
+}
+
+/**
+ * Fetch community-posted jobs from the 'jobs' node.
+ */
+export async function fetchCustomJobs(): Promise<Job[]> {
+  try {
+    const listRef = ref(db, 'jobs')
+    const snap = await get(listRef)
+    if (!snap.exists()) return []
+    const data = snap.val()
+    if (Array.isArray(data)) return data as Job[]
+    return Object.values(data) as Job[]
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`Failed to fetch custom jobs: ${message}`)
+  }
+}
+
 export default {
   firebaseApp,
   auth,
@@ -109,4 +150,6 @@ export default {
   removeUserJob,
   getUserSavedJobs,
   submitJobApplication,
+  postNewJob,
+  fetchCustomJobs,
 }

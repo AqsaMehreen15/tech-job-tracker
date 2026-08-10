@@ -1,5 +1,6 @@
 import { pakistanJobs } from '../data/pakistanJobs'
 import { Job, JobFilter, JobResponse } from '../types/job'
+import { fetchCustomJobs } from './firebase'
 
 const REMOTIVE_ENDPOINT = 'https://remotive.com/api/remote-jobs'
 const FETCH_TIMEOUT_MS = 3000
@@ -42,7 +43,8 @@ const safeFetchJobs = async (): Promise<Job[]> => {
 
 export const fetchJobs = async (filters?: JobFilter): Promise<Job[]> => {
   const remoteJobs = await safeFetchJobs()
-  const allJobs: Job[] = [...pakistanJobs, ...remoteJobs]
+  const customJobs = await fetchCustomJobs().catch(() => [])
+  const allJobs: Job[] = [...pakistanJobs, ...remoteJobs, ...customJobs]
 
   if (!filters) {
     return allJobs
