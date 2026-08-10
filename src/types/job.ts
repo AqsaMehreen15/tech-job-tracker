@@ -9,14 +9,15 @@ export interface Job {
   id: JobId
   title: string
   company_name: string
-  category: string
-  job_type: string
-  publication_date: string
-  candidate_required_location: string
-  salary: string
-  description: string
-  url: string
+  category?: string
+  job_type?: string
+  publication_date?: string
+  candidate_required_location?: string
+  salary?: string
+  description?: string
+  url?: string
   company_logo?: string
+  tags?: string[]
 }
 
 /**

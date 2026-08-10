@@ -1,5 +1,6 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import type { Job } from '../types/job'
+import { useAuth } from '../context/AuthContext'
 import ApplyModal from './ApplyModal'
 import JobDetailsModal from './JobDetailsModal'
 
@@ -65,32 +66,79 @@ function formatDate(raw?: string) {
 }
 
 export const JobCard: React.FC<JobCardProps> = ({ job, onBookmark, isBookmarked }) => {
+  const { currentUser } = useAuth()
+
   const [imageError, setImageError] = useState(false)
   const initial = job.company_name ? job.company_name.charAt(0).toUpperCase() : 'C'
   const [applyOpen, setApplyOpen] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
+  const [guestSaved, setGuestSaved] = useState(false)
 
   const handleApplyFromDetails = () => {
     setDetailsOpen(false)
     setApplyOpen(true)
   }
 
+  useEffect(() => {
+    // Reset image error when the company logo URL changes so new logos will attempt to load
+    setImageError(false)
+  }, [job.company_logo])
+
+  useEffect(() => {
+    if (!currentUser) {
+      try {
+        const raw = localStorage.getItem('guest_favorites') || '[]'
+        const list: string[] = JSON.parse(raw)
+        setGuestSaved(list.includes(String(job.id)))
+      } catch {
+        setGuestSaved(false)
+      }
+    }
+  }, [job.id, currentUser])
+
+  const toggleBookmark = () => {
+    if (currentUser) {
+      // Logged-in user: call provided onBookmark to handle persistence (e.g., Firebase)
+      onBookmark && onBookmark(job)
+      return
+    }
+
+    // Guest user: persist in localStorage
+    try {
+      const raw = localStorage.getItem('guest_favorites') || '[]'
+      const list: string[] = JSON.parse(raw)
+      const idStr = String(job.id)
+      const exists = list.includes(idStr)
+      let newList: string[]
+      if (exists) {
+        newList = list.filter((i) => i !== idStr)
+      } else {
+        newList = [...list, idStr]
+      }
+      localStorage.setItem('guest_favorites', JSON.stringify(newList))
+      setGuestSaved(!exists)
+    } catch (err) {
+      // ignore localStorage errors silently
+    }
+  }
+
   return (
     <article style={styles.card} aria-labelledby={`job-${job.id}-title`}>
       <div style={styles.logoWrap}>
-        {job.company_logo && !imageError ? (
-          // eslint-disable-next-line jsx-a11y/img-redundant-alt
-          <img
-            src={job.company_logo}
-            alt={`${job.company_name} logo`}
-            style={styles.logo}
-            onError={() => setImageError(true)}
-          />
-        ) : (
-          <div style={styles.fallbackAvatar} aria-hidden>
-            {initial}
-          </div>
-        )}
+          {job.company_logo && !imageError ? (
+            // eslint-disable-next-line jsx-a11y/img-redundant-alt
+            <img
+              src={job.company_logo}
+              alt={`${job.company_name} logo`}
+              style={styles.logo}
+              onError={() => setImageError(true)}
+              onLoad={() => setImageError(false)}
+            />
+          ) : (
+            <div style={{ ...styles.fallbackAvatar, background: '#eef2ff', width: 64, height: 64, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8 }} aria-hidden>
+              {initial}
+            </div>
+          )}
       </div>
 
       <div style={styles.content}>
@@ -110,11 +158,11 @@ export const JobCard: React.FC<JobCardProps> = ({ job, onBookmark, isBookmarked 
             <div style={{ color: '#6b7280', fontSize: 13 }}>{formatDate(job.publication_date)}</div>
             <button
               aria-pressed={!!isBookmarked}
-              onClick={() => onBookmark && onBookmark(job)}
-              title={isBookmarked ? 'Remove bookmark' : 'Bookmark'}
+              onClick={toggleBookmark}
+                title={isBookmarked || guestSaved ? 'Remove bookmark' : 'Bookmark'}
               style={styles.bookmarkBtn}
             >
-              {isBookmarked ? '★' : '☆'}
+                {isBookmarked || guestSaved ? '★' : '☆'}
             </button>
           </div>
         </div>

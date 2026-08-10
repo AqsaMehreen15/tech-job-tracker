@@ -67,9 +67,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
     }
   }
 
+  const handleBackdropClick = (e: React.MouseEvent) => {
+    if (e.target === e.currentTarget) onClose()
+  }
+
   return (
-    <div style={styles.backdrop} role="dialog" aria-modal="true">
-      <div style={styles.card}>
+    <div style={styles.backdrop} role="dialog" aria-modal="true" onClick={handleBackdropClick}>
+      <div style={styles.card} onClick={(e) => e.stopPropagation()}>
         <button aria-label="Close" onClick={onClose} style={styles.closeBtn}>
           ×
         </button>

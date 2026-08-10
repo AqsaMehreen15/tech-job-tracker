@@ -42,6 +42,12 @@ export const HomeView: React.FC<HomeViewProps> = ({ onBookmark }) => {
     void loadJobs(updated)
   }
 
+  const onResetFilters = () => {
+    const reset = { searchQuery: '', category: 'all', jobType: 'all' }
+    setFilter(reset)
+    void loadJobs(reset)
+  }
+
   return (
     <section style={styles.page}>
       <header style={styles.hero}>
@@ -64,10 +70,18 @@ export const HomeView: React.FC<HomeViewProps> = ({ onBookmark }) => {
             onChange={(e) => onCategoryChange(e.target.value)}
           >
             <option value="all">All categories</option>
-            <option value="software-dev">Software Development</option>
-            <option value="customer-support">Customer Support</option>
-            <option value="design">Design</option>
-            <option value="marketing">Marketing</option>
+            <option value="Frontend">Frontend</option>
+            <option value="Backend">Backend</option>
+            <option value="Full Stack">Full Stack</option>
+            <option value="Mobile">Mobile</option>
+            <option value="UI/UX Design">UI/UX Design</option>
+            <option value="DevOps">DevOps</option>
+            <option value="Data Science">Data Science</option>
+            <option value="Cyber Security">Cyber Security</option>
+            <option value="Quality Assurance (QA)">Quality Assurance (QA)</option>
+            <option value="Product Management">Product Management</option>
+            <option value="AI/ML">AI/ML</option>
+            <option value="Marketing">Marketing</option>
           </select>
 
           <select
@@ -77,10 +91,18 @@ export const HomeView: React.FC<HomeViewProps> = ({ onBookmark }) => {
             onChange={(e) => onJobTypeChange(e.target.value)}
           >
             <option value="all">All types</option>
-            <option value="full_time">Full time</option>
-            <option value="contract">Contract</option>
-            <option value="internship">Internship</option>
+            <option value="Full-time">Full-time</option>
+            <option value="Part-time">Part-time</option>
+            <option value="Remote">Remote</option>
+            <option value="Contract">Contract</option>
+            <option value="Internship">Internship</option>
           </select>
+
+          {(filter.searchQuery || filter.category !== 'all' || filter.jobType !== 'all') && (
+            <button type="button" onClick={onResetFilters} style={{ ...styles.button, background: '#6b7280' }}>
+              Reset Filters
+            </button>
+          )}
 
           <button type="submit" style={styles.button}>Search</button>
         </form>
