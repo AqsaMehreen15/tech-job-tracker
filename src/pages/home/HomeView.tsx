@@ -123,11 +123,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onBookmark }) => {
             </button>
           </div>
         </div>
-      ) : jobs.length === 0 && loading ? (
-        <div style={styles.loading}>Loading jobs…</div>
-      ) : jobs.length === 0 ? (
-        <div style={styles.empty}>No jobs found. Try adjusting your search or filters.</div>
-      ) : (
+      ) : jobs.length > 0 ? (
         <>
           <div style={styles.grid}>
             {jobs.map((job) => (
@@ -138,6 +134,10 @@ export const HomeView: React.FC<HomeViewProps> = ({ onBookmark }) => {
             <div style={{ ...styles.loading, marginTop: 16 }}>Loading additional jobs…</div>
           )}
         </>
+      ) : loading ? (
+        <div style={styles.loading}>Loading jobs…</div>
+      ) : (
+        <div style={styles.empty}>No jobs found. Try adjusting your search or filters.</div>
       )}
     </section>
   )

@@ -12,15 +12,34 @@ const FETCH_TIMEOUT_MS = 5000
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000
 
 const normalizeJobId = (job: Job): string => {
-  if (job.id !== undefined && job.id !== null) {
-    return String(job.id)
+  if (job.id !== undefined && job.id !== null && String(job.id).trim()) {
+    return String(job.id).trim()
   }
-  return `${job.title || ''}|${job.company_name || ''}`.toLowerCase()
+  return `${job.title || ''}|${job.company_name || ''}`.toLowerCase().trim()
+}
+
+const makeFallbackUrl = (job: Job): string => {
+  const title = job.title?.trim() || 'job'
+  const company = job.company_name?.trim() || 'company'
+  return `https://www.google.com/search?q=${encodeURIComponent(`${title} ${company}`)}`
+}
+
+const normalizeJob = (job: Job): Job => {
+  const url = job.url?.trim() || makeFallbackUrl(job)
+  const companyLogo = job.company_logo?.trim() || ''
+  const id = job.id ?? `${job.title || ''}-${job.company_name || ''}`
+
+  return {
+    ...job,
+    id,
+    url,
+    company_logo: companyLogo,
+  }
 }
 
 const mergeJobs = (jobs: Job[]): Job[] => {
   const seen = new Map<string, Job>()
-  for (const job of jobs) {
+  for (const job of jobs.map(normalizeJob)) {
     const key = normalizeJobId(job)
     if (!seen.has(key)) {
       seen.set(key, job)

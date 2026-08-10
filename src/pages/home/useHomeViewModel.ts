@@ -15,7 +15,6 @@ export function useHomeViewModel() {
   const [filter, setFilter] = useState<JobFilter>(INITIAL_FILTER)
   const [activeSource, setActiveSource] = useState<string>('static')
   const [totalJobs, setTotalJobs] = useState<number>(0)
-  const [fastJobs, setFastJobs] = useState<Job[]>([])
 
   const loadJobs = useCallback(
     async (currentFilter?: JobFilter) => {
@@ -26,7 +25,6 @@ export function useHomeViewModel() {
         const active = currentFilter ?? filter
 
         const fastResult = await JobRepository.getJobsFast(active)
-        setFastJobs(fastResult.jobs)
         setJobs(fastResult.jobs)
         setActiveSource(fastResult.source)
         setTotalJobs(fastResult.jobs.length)
