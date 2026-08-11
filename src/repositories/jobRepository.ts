@@ -5,14 +5,9 @@ const normalizeText = (value?: string): string =>
   String(value ?? '')
     .toLowerCase()
     .trim()
+    .replace(/[–—―]/g, ' ')
     .replace(/[-_]+/g, ' ')
     .replace(/\s+/g, ' ')
-
-const matches = (value: string, query: string): boolean => {
-  const normalizedValue = normalizeText(value)
-  const normalizedQuery = normalizeText(query)
-  return normalizedValue.includes(normalizedQuery)
-}
 
 const flattenTags = (job: Job): string[] => {
   const raw = (job as any).tags
@@ -89,6 +84,13 @@ const matchesSearchQuery = (job: Job, query: string): boolean => {
   return jobText.includes(normalizedQuery)
 }
 
+const matchesLocation = (job: Job, locationValue: string): boolean => {
+  if (!locationValue) return true
+  const normalizedLocation = normalizeText(locationValue)
+  const candidateLocation = normalizeText(job.candidate_required_location)
+  return candidateLocation.includes(normalizedLocation) || getJobText(job).includes(normalizedLocation)
+}
+
 const filterJobs = (jobs: Job[], filters: JobFilter): Job[] => {
   const query = normalizeText(filters.searchQuery)
   const categoryFilter = normalizeText(filters.category)
@@ -97,7 +99,7 @@ const filterJobs = (jobs: Job[], filters: JobFilter): Job[] => {
   const remainingQuery = cityInQuery ? query.replace(cityInQuery, '').trim() : query
 
   const primaryMatches = jobs.filter((job) => {
-    if (cityInQuery && !normalizeText(job.candidate_required_location).includes(cityInQuery)) {
+    if (cityInQuery && !matchesLocation(job, cityInQuery)) {
       return false
     }
 
@@ -125,8 +127,9 @@ const filterJobs = (jobs: Job[], filters: JobFilter): Job[] => {
     const categoryMatch = categoryFilter && categoryFilter !== 'all' ? jobText.includes(categoryFilter) : true
     const typeMatch = jobTypeFilter && jobTypeFilter !== 'all' ? matchesJobType(job, jobTypeFilter) : true
     const queryMatch = remainingQuery ? jobText.includes(remainingQuery) : true
+    const locationMatch = cityInQuery ? matchesLocation(job, cityInQuery) : true
     const tagMatch = flattenTags(job).some((tag) => categoryMatch && typeMatch && tag.includes(categoryFilter))
-    return categoryMatch && typeMatch && queryMatch && (tagMatch || jobText.includes(categoryFilter) || jobText.includes(jobTypeFilter))
+    return categoryMatch && typeMatch && queryMatch && locationMatch && (tagMatch || jobText.includes(categoryFilter) || jobText.includes(jobTypeFilter))
   })
 
   return primaryMatches.length > 0 ? mergeJobs([...primaryMatches, ...broadened]) : mergeJobs(broadened)

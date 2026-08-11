@@ -1,21 +1,29 @@
 import type { Job } from '../types/job'
-import { JobFilter } from '../types/job'
-import { pakistanJobs } from '../data/pakistanJobs'
 import { fetchCustomJobs, firebaseApp } from './firebase'
 import { fetchRozeeJobs } from './rozeeFeed'
 import { getFirestore, collection, doc, getDoc, setDoc, serverTimestamp, Timestamp } from 'firebase/firestore'
 
 const REMOTIVE_ENDPOINT = 'https://remotive.com/api/remote-jobs'
+const ARBEITNOW_ENDPOINT = 'https://www.arbeitnow.com/api/job-board'
+const JOBICY_ENDPOINT = 'https://jobicy.com/api/v2/remote-jobs?count=50'
 const JSEARCH_ENDPOINT = 'https://jsearch.p.rapidapi.com/search'
 const JSEARCH_API_KEY = String(import.meta.env.VITE_JSEARCH_API_KEY ?? '')
 const FETCH_TIMEOUT_MS = 5000
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000
 
-const normalizeJobId = (job: Job): string => {
-  if (job.id !== undefined && job.id !== null && String(job.id).trim()) {
-    return String(job.id).trim()
-  }
-  return `${job.title || ''}|${job.company_name || ''}`.toLowerCase().trim()
+const normalizeText = (value?: string): string =>
+  String(value ?? '')
+    .toLowerCase()
+    .trim()
+    .replace(/[–—―]/g, ' ')
+    .replace(/[-_]+/g, ' ')
+    .replace(/\s+/g, ' ')
+
+const normalizeJobKey = (job: Job): string => {
+  const company = normalizeText(job.company_name)
+  const title = normalizeText(job.title)
+  const location = normalizeText((job as any).candidate_required_location ?? (job as any).location ?? job.url ?? '')
+  return `${company}|${title}|${location}`
 }
 
 const makeFallbackUrl = (job: Job): string => {
@@ -25,22 +33,29 @@ const makeFallbackUrl = (job: Job): string => {
 }
 
 const normalizeJob = (job: Job): Job => {
-  const url = job.url?.trim() || makeFallbackUrl(job)
-  const companyLogo = job.company_logo?.trim() || ''
-  const id = job.id ?? `${job.title || ''}-${job.company_name || ''}`
+  const title = job.title?.trim() || 'Job'
+  const company_name = job.company_name?.trim() || 'Unknown'
+  const candidate_required_location =
+    job.candidate_required_location?.trim() || (job as any).location?.trim() || 'Remote'
+  const url = job.url?.trim() || makeFallbackUrl({ title, company_name } as Job)
+  const company_logo = job.company_logo?.trim() || ''
+  const id = String(job.id ?? `${title}-${company_name}-${candidate_required_location}`).trim()
 
   return {
     ...job,
     id,
+    title,
+    company_name,
+    candidate_required_location,
     url,
-    company_logo: companyLogo,
+    company_logo,
   }
 }
 
 export const mergeJobs = (jobs: Job[]): Job[] => {
   const seen = new Map<string, Job>()
   for (const job of jobs.map(normalizeJob)) {
-    const key = normalizeJobId(job)
+    const key = normalizeJobKey(job)
     if (!seen.has(key)) {
       seen.set(key, job)
     }
@@ -73,11 +88,81 @@ const safeFetchRemotiveJobs = async (): Promise<Job[]> => {
   }
 }
 
-export async function getFastJobsFromEngine(): Promise<{ jobs: Job[]; source: string }> {
-  const [customJobs, remotiveJobs] = await Promise.all([safeFetchCustomJobs(), safeFetchRemotiveJobs()])
-  const source = customJobs.length > 0 ? 'firebase' : remotiveJobs.length > 0 ? 'remotive' : 'static'
-  const jobs = mergeJobs([...customJobs, ...remotiveJobs, ...pakistanJobs])
-  return { jobs, source }
+const safeFetchArbeitnowJobs = async (): Promise<Job[]> => {
+  const controller = new AbortController()
+  const timeoutId = window.setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
+
+  try {
+    const response = await fetch(ARBEITNOW_ENDPOINT, { signal: controller.signal })
+    if (!response.ok) return []
+
+    const json = await response.json()
+    const items = Array.isArray(json.data) ? json.data : []
+    if (!Array.isArray(items)) return []
+
+    return items.map((item: any): Job => ({
+      id: item.slug ?? item.id ?? `${item.title}-${item.company_name ?? item.company}`,
+      title: item.title ?? 'Job',
+      company_name: item.company_name ?? item.company ?? 'Unknown',
+      candidate_required_location:
+        item.location || (item.remote ? 'Remote' : undefined) || item.candidate_required_location,
+      url: item.url ?? item.redirect_url ?? item.job_ad_link,
+      publication_date: item.created_at ?? item.publication_date,
+      description: item.description ?? item.details,
+      category: item.tags ? (Array.isArray(item.tags) ? String(item.tags[0] ?? '') : String(item.tags)) : item.job_type,
+      job_type: Array.isArray(item.job_types)
+        ? item.job_types.join(', ')
+        : item.job_type ?? item.employment_type,
+      company_logo: item.company_logo,
+      tags: Array.isArray(item.tags)
+        ? item.tags.map((tag: any) => String(tag))
+        : typeof item.tags === 'string'
+        ? item.tags.split(/[,;|]/).map((tag: string) => tag.trim()).filter(Boolean)
+        : undefined,
+    }))
+  } catch {
+    return []
+  } finally {
+    window.clearTimeout(timeoutId)
+  }
+}
+
+const safeFetchJobicyJobs = async (): Promise<Job[]> => {
+  const controller = new AbortController()
+  const timeoutId = window.setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
+
+  try {
+    const response = await fetch(JOBICY_ENDPOINT, { signal: controller.signal })
+    if (!response.ok) return []
+
+    const json = await response.json()
+    const items =
+      Array.isArray(json.jobs) ? json.jobs : Array.isArray(json.results) ? json.results : Array.isArray(json.data) ? json.data : []
+    if (!Array.isArray(items)) return []
+
+    return items.map((item: any): Job => ({
+      id: item.id ?? item.uuid ?? `${item.title}-${item.company_name ?? item.company}`,
+      title: item.title ?? item.role ?? 'Job',
+      company_name: item.company_name ?? item.company ?? item.employer_name ?? 'Unknown',
+      candidate_required_location:
+        item.location || item.candidate_required_location || (item.remote ? 'Remote' : undefined),
+      url: item.url ?? item.apply_url ?? item.job_url ?? item.link,
+      publication_date: item.created_at ?? item.posted_at ?? item.publication_date,
+      description: item.description ?? item.summary,
+      category: item.category ?? item.job_category,
+      job_type: item.job_type ?? item.employment_type ?? item.type,
+      company_logo: item.company_logo,
+      tags: Array.isArray(item.tags)
+        ? item.tags.map((tag: any) => String(tag))
+        : typeof item.tags === 'string'
+        ? item.tags.split(/[,;|]/).map((tag: string) => tag.trim()).filter(Boolean)
+        : undefined,
+    }))
+  } catch {
+    return []
+  } finally {
+    window.clearTimeout(timeoutId)
+  }
 }
 
 const isCacheFresh = (timestamp: unknown): boolean => {
@@ -132,12 +217,14 @@ const fetchCachedJSearchJobs = async (): Promise<Job[]> => {
           id: item.job_id ?? item.id ?? `${item.title}-${item.company_name ?? item.company}`,
           title: item.job_title ?? item.title ?? 'Job',
           company_name: item.employer_name ?? item.company_name ?? item.company ?? 'Unknown',
-          candidate_required_location: item.job_city ?? item.location ?? item.candidate_required_location ?? 'Remote',
+          candidate_required_location:
+            item.job_city ?? item.location ?? item.candidate_required_location ?? 'Remote',
           url: item.job_apply_link ?? item.job_link ?? item.url,
           publication_date: item.job_posted_at ?? item.publication_date,
           description: item.job_description ?? item.description,
           category: item.job_category ?? item.category,
-          job_type: item.job_employment_type ?? item.job_type ?? item.job_employment_type ?? 'Remote',
+          job_type:
+            item.job_employment_type ?? item.job_type ?? item.job_employment_type ?? 'Remote',
         }))
       : []
 
@@ -152,32 +239,33 @@ const fetchCachedJSearchJobs = async (): Promise<Job[]> => {
   }
 }
 
+export async function getFastJobsFromEngine(): Promise<{ jobs: Job[]; source: string }> {
+  return getJobsFromEngine()
+}
+
 export async function getJobsFromEngine(): Promise<{ jobs: Job[]; source: string }> {
-  const [customJobs, rozeeJobs, remotiveJobs, jsearchJobs] = await Promise.all([
-    safeFetchCustomJobs(),
-    fetchRozeeJobs(),
-    safeFetchRemotiveJobs(),
-    fetchCachedJSearchJobs(),
-  ])
+  const sources = [
+    { name: 'firebase', promise: safeFetchCustomJobs() },
+    { name: 'rozee', promise: fetchRozeeJobs() },
+    { name: 'remotive', promise: safeFetchRemotiveJobs() },
+    { name: 'arbeitnow', promise: safeFetchArbeitnowJobs() },
+    { name: 'jobicy', promise: safeFetchJobicyJobs() },
+    { name: 'cached_jsearch', promise: fetchCachedJSearchJobs() },
+  ]
 
-  let source = 'static'
-  if (customJobs.length > 0) {
-    source = 'firebase'
-  } else if (rozeeJobs.length > 0) {
-    source = 'rozee'
-  } else if (remotiveJobs.length > 0) {
-    source = 'remotive'
-  } else if (jsearchJobs.length > 0) {
-    source = 'cached_jsearch'
-  }
+  const results = await Promise.allSettled(sources.map((source) => source.promise))
+  const fulfilledJobs = results
+    .map((result, index) => ({ result, source: sources[index].name }))
+    .filter((item) => item.result.status === 'fulfilled')
+    .flatMap((item) => (item.result.status === 'fulfilled' ? item.result.value : []))
 
-  const combinedJobs = mergeJobs([
-    ...customJobs,
-    ...rozeeJobs,
-    ...remotiveJobs,
-    ...jsearchJobs,
-    ...pakistanJobs,
-  ])
+  const sourceParts = results
+    .map((result, index) => ({ result, name: sources[index].name }))
+    .filter((item) => item.result.status === 'fulfilled' && item.result.value.length > 0)
+    .map((item) => item.name)
+
+  const source = sourceParts.length > 0 ? sourceParts.join('+') : 'none'
+  const combinedJobs = mergeJobs(fulfilledJobs)
 
   return { jobs: combinedJobs, source }
 }

@@ -23,15 +23,10 @@ export function useHomeViewModel() {
       setError(null)
 
       try {
-        const fastResult = await JobRepository.getJobsFast(active)
-        setJobs(fastResult.jobs)
-        setActiveSource(fastResult.source)
-        setTotalJobs(fastResult.jobs.length)
-
-        const fullResult = await JobRepository.getJobs(active)
-        setJobs(fullResult.jobs)
-        setActiveSource(fullResult.source)
-        setTotalJobs(fullResult.jobs.length)
+        const { jobs: fetchedJobs, source } = await JobRepository.getJobs(active)
+        setJobs(fetchedJobs)
+        setActiveSource(source)
+        setTotalJobs(fetchedJobs.length)
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err)
         setError(`Unable to load jobs: ${message}`)
@@ -47,7 +42,6 @@ export function useHomeViewModel() {
 
   useEffect(() => {
     loadJobs()
-    // intentionally only run on mount and when loadJobs changes
   }, [loadJobs])
 
   const handleSearch = async (searchQuery: string) => {
