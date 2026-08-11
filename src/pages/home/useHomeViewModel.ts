@@ -4,7 +4,7 @@ import type { Job, JobFilter } from '../../types/job'
 
 const INITIAL_FILTER: JobFilter = {
   searchQuery: '',
-  category: 'all',
+  category: '',
   jobType: 'all',
 }
 

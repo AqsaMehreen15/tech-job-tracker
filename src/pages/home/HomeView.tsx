@@ -43,7 +43,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onBookmark }) => {
   }
 
   const onResetFilters = () => {
-    const reset = { searchQuery: '', category: 'all', jobType: 'all' }
+    const reset = { searchQuery: '', category: '', jobType: 'all' }
     setFilter(reset)
     void updateFilters(reset)
   }
@@ -79,7 +79,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onBookmark }) => {
             value={filter.category}
             onChange={(e) => onCategoryChange(e.target.value)}
           >
-            <option value="all">All categories</option>
+            <option value="">All categories</option>
             <option value="Frontend">Frontend</option>
             <option value="Backend">Backend</option>
             <option value="Full Stack">Full Stack</option>

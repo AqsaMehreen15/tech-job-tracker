@@ -254,18 +254,18 @@ export async function getJobsFromEngine(): Promise<{ jobs: Job[]; source: string
   ]
 
   const results = await Promise.allSettled(sources.map((source) => source.promise))
-  const fulfilledJobs = results
-    .map((result, index) => ({ result, source: sources[index].name }))
-    .filter((item) => item.result.status === 'fulfilled')
-    .flatMap((item) => (item.result.status === 'fulfilled' ? item.result.value : []))
+  const rawJobs = results.flatMap((result) => {
+    if (result.status !== 'fulfilled' || !Array.isArray(result.value)) return []
+    return result.value
+  })
 
   const sourceParts = results
     .map((result, index) => ({ result, name: sources[index].name }))
-    .filter((item) => item.result.status === 'fulfilled' && item.result.value.length > 0)
+    .filter((item) => item.result.status === 'fulfilled' && Array.isArray(item.result.value) && item.result.value.length > 0)
     .map((item) => item.name)
 
   const source = sourceParts.length > 0 ? sourceParts.join('+') : 'none'
-  const combinedJobs = mergeJobs(fulfilledJobs)
+  const combinedJobs = mergeJobs(rawJobs)
 
   return { jobs: combinedJobs, source }
 }
