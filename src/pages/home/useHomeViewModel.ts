@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+﻿import { useCallback, useEffect, useState } from 'react'
 import { JobRepository } from '../../repositories/jobRepository'
 import type { Job, JobFilter } from '../../types/job'
 
@@ -6,6 +6,7 @@ const INITIAL_FILTER: JobFilter = {
   searchQuery: '',
   category: '',
   jobType: 'all',
+  location: '',
 }
 
 export function useHomeViewModel() {
@@ -13,17 +14,17 @@ export function useHomeViewModel() {
   const [loading, setLoading] = useState<boolean>(true)
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<JobFilter>(INITIAL_FILTER)
-  const [activeSource, setActiveSource] = useState<string>('static')
+  const [activeSource, setActiveSource] = useState<string>('local')
   const [totalJobs, setTotalJobs] = useState<number>(0)
 
   const loadJobs = useCallback(
     async (currentFilter?: JobFilter) => {
-      const active = currentFilter ?? filter
+      const activeFilter = currentFilter ?? filter
       setLoading(true)
       setError(null)
 
       try {
-        const { jobs: fetchedJobs, source } = await JobRepository.getJobs(active)
+        const { jobs: fetchedJobs, source } = await JobRepository.getJobs(activeFilter)
         setJobs(fetchedJobs)
         setActiveSource(source)
         setTotalJobs(fetchedJobs.length)
@@ -32,7 +33,7 @@ export function useHomeViewModel() {
         setError(`Unable to load jobs: ${message}`)
         setJobs([])
         setTotalJobs(0)
-        setActiveSource('static')
+        setActiveSource('local')
       } finally {
         setLoading(false)
       }
@@ -41,19 +42,59 @@ export function useHomeViewModel() {
   )
 
   useEffect(() => {
-    loadJobs()
-  }, [loadJobs])
+    void loadJobs(INITIAL_FILTER)
+  }, [])
 
-  const handleSearch = async (searchQuery: string) => {
-    const updated: JobFilter = { ...filter, searchQuery }
-    setFilter(updated)
-    await loadJobs(updated)
-  }
+  const setSearchQuery = useCallback(
+    async (searchQuery: string) => {
+      const nextFilter = { ...filter, searchQuery }
+      setFilter(nextFilter)
+      await loadJobs(nextFilter)
+    },
+    [filter, loadJobs]
+  )
 
-  const updateFilters = async (updatedFilter: JobFilter) => {
-    setFilter(updatedFilter)
-    await loadJobs(updatedFilter)
-  }
+  const setCategoryFilter = useCallback(
+    async (category: string) => {
+      const nextFilter = { ...filter, category }
+      setFilter(nextFilter)
+      await loadJobs(nextFilter)
+    },
+    [filter, loadJobs]
+  )
+
+  const setJobTypeFilter = useCallback(
+    async (jobType: string) => {
+      const nextFilter = { ...filter, jobType }
+      setFilter(nextFilter)
+      await loadJobs(nextFilter)
+    },
+    [filter, loadJobs]
+  )
+
+  const setLocationFilter = useCallback(
+    async (location: string) => {
+      const nextFilter = { ...filter, location }
+      setFilter(nextFilter)
+      await loadJobs(nextFilter)
+    },
+    [filter, loadJobs]
+  )
+
+  const updateFilters = useCallback(
+    async (updatedFilter: JobFilter) => {
+      setFilter(updatedFilter)
+      await loadJobs(updatedFilter)
+    },
+    [loadJobs]
+  )
+
+  const handleSearch = useCallback(
+    async (searchQuery: string) => {
+      await setSearchQuery(searchQuery)
+    },
+    [setSearchQuery]
+  )
 
   return {
     jobs,
@@ -65,6 +106,10 @@ export function useHomeViewModel() {
     totalJobs,
     handleSearch,
     updateFilters,
+    setSearchQuery,
+    setCategoryFilter,
+    setJobTypeFilter,
+    setLocationFilter,
     loadJobs,
   }
 }

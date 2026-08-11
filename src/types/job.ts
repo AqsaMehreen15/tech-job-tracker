@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Job-related TypeScript types for Tech Job Tracker
  * Based on Remotive API fields (minimal, strict definitions)
  */
@@ -18,6 +18,7 @@ export interface Job {
   url?: string
   company_logo?: string
   tags?: string[]
+  source?: string
 }
 
 /**
@@ -30,6 +31,7 @@ export interface JobFilter {
   searchQuery: string
   category: string
   jobType: JobType
+  location?: string
 }
 
 /**
@@ -39,7 +41,6 @@ export interface JobFilter {
 export interface JobResponse {
   jobs: Job[]
   job_count?: number
-  // allow additional fields from the API without losing typing
   [key: string]: unknown
 }
 

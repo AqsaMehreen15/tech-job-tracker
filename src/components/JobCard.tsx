@@ -131,8 +131,18 @@ export const JobCard: React.FC<JobCardProps> = ({ job, onBookmark, isBookmarked 
               src={job.company_logo}
               alt={`${job.company_name} logo`}
               style={styles.logo}
-              onError={() => setImageError(true)}
-              onLoad={() => setImageError(false)}
+              onError={(e) => {
+                try {
+                  e.currentTarget.style.display = 'none'
+                } catch {}
+                setImageError(true)
+              }}
+              onLoad={(e) => {
+                try {
+                  e.currentTarget.style.display = ''
+                } catch {}
+                setImageError(false)
+              }}
             />
           ) : (
             <div style={{ ...styles.fallbackAvatar, background: '#eef2ff', width: 64, height: 64, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8 }} aria-hidden>
