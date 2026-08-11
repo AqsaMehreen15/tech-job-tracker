@@ -66,7 +66,8 @@ export const mergeJobs = (jobs: Job[]): Job[] => {
 const safeFetchCustomJobs = async (): Promise<Job[]> => {
   try {
     return await Promise.race([fetchCustomJobs(), new Promise<Job[]>((resolve) => setTimeout(() => resolve([]), 1500))])
-  } catch {
+  } catch (err: unknown) {
+    console.warn('[jobEngine] fetchCustomJobs failed:', err)
     return []
   }
 }
@@ -76,12 +77,14 @@ const safeFetchRemotiveJobs = async (): Promise<Job[]> => {
   const timeoutId = window.setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
 
   try {
-    const response = await fetch(REMOTIVE_ENDPOINT, { signal: controller.signal })
+    const proxied = `https://corsproxy.io/?${encodeURIComponent(REMOTIVE_ENDPOINT)}`
+    const response = await fetch(proxied, { signal: controller.signal })
     if (!response.ok) return []
 
     const data = (await response.json()) as { jobs?: Job[] }
     return Array.isArray(data.jobs) ? data.jobs : []
-  } catch {
+  } catch (err: unknown) {
+    console.warn('[jobEngine] Remotive fetch failed (CORS/Network):', err)
     return []
   } finally {
     window.clearTimeout(timeoutId)
@@ -93,7 +96,8 @@ const safeFetchArbeitnowJobs = async (): Promise<Job[]> => {
   const timeoutId = window.setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
 
   try {
-    const response = await fetch(ARBEITNOW_ENDPOINT, { signal: controller.signal })
+    const proxied = `https://corsproxy.io/?${encodeURIComponent(ARBEITNOW_ENDPOINT)}`
+    const response = await fetch(proxied, { signal: controller.signal })
     if (!response.ok) return []
 
     const json = await response.json()
@@ -120,7 +124,8 @@ const safeFetchArbeitnowJobs = async (): Promise<Job[]> => {
         ? item.tags.split(/[,;|]/).map((tag: string) => tag.trim()).filter(Boolean)
         : undefined,
     }))
-  } catch {
+  } catch (err: unknown) {
+    console.warn('[jobEngine] Arbeitnow fetch failed (CORS/Network):', err)
     return []
   } finally {
     window.clearTimeout(timeoutId)
@@ -132,7 +137,8 @@ const safeFetchJobicyJobs = async (): Promise<Job[]> => {
   const timeoutId = window.setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
 
   try {
-    const response = await fetch(JOBICY_ENDPOINT, { signal: controller.signal })
+    const proxied = `https://corsproxy.io/?${encodeURIComponent(JOBICY_ENDPOINT)}`
+    const response = await fetch(proxied, { signal: controller.signal })
     if (!response.ok) return []
 
     const json = await response.json()
@@ -158,7 +164,8 @@ const safeFetchJobicyJobs = async (): Promise<Job[]> => {
         ? item.tags.split(/[,;|]/).map((tag: string) => tag.trim()).filter(Boolean)
         : undefined,
     }))
-  } catch {
+  } catch (err: unknown) {
+    console.warn('[jobEngine] Jobicy fetch failed (CORS/Network):', err)
     return []
   } finally {
     window.clearTimeout(timeoutId)
@@ -234,7 +241,8 @@ const fetchCachedJSearchJobs = async (): Promise<Job[]> => {
     })
 
     return jobs
-  } catch {
+  } catch (err: unknown) {
+    console.warn('[jobEngine] fetchCachedJSearchJobs failed:', err)
     return []
   }
 }
