@@ -2,38 +2,87 @@
 import { fetchCustomJobs, firebaseApp } from './firebase'
 import { pakistanJobs } from '../data/pakistanJobs'
 import { fetchRozeeJobs } from './rozeeFeed'
-import { getFirestore, collection, doc, getDoc, setDoc, serverTimestamp, Timestamp } from 'firebase/firestore'
+import {
+  getFirestore,
+  collection,
+  doc,
+  getDoc,
+  setDoc,
+  serverTimestamp,
+  Timestamp,
+} from 'firebase/firestore'
 
-const REMOTIVE_ENDPOINT = 'https://remotive.com/api/remote-jobs'
-const ARBEITNOW_ENDPOINT = 'https://www.arbeitnow.com/api/job-board'
-const JOBICY_ENDPOINT = 'https://jobicy.com/api/v2/remote-jobs?count=50'
-const JSEARCH_ENDPOINT = 'https://jsearch.p.rapidapi.com/search'
-const JSEARCH_API_KEY = String(import.meta.env.VITE_JSEARCH_API_KEY ?? '')
-const FETCH_TIMEOUT_MS = 7000
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000
-const SESSION_TTL_MS = 10 * 60 * 1000
+/* -------------------------------------------------------------------------- */
+/* CONFIG                                                                     */
+/* -------------------------------------------------------------------------- */
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+const REMOTIVE_ENDPOINT =
+  'https://remotive.com/api/remote-jobs'
 
-async function fetchWithRetry(url: string, options: RequestInit = {}, retries = 2, delay = 1000): Promise<Response> {
-  try {
-    const res = await fetch(url, options)
-    if (res.ok) return res
-    if ((res.status === 429 || (res.status >= 500 && res.status < 600)) && retries > 0) {
-      await sleep(delay)
-      return fetchWithRetry(url, options, retries - 1, delay * 2)
-    }
-    return res
-  } catch (err) {
-    if (retries > 0) {
-      await sleep(delay)
-      return fetchWithRetry(url, options, retries - 1, delay * 2)
-    }
-    throw err
+const ARBEITNOW_ENDPOINT =
+  'https://www.arbeitnow.com/api/job-board'
+
+const JOBICY_ENDPOINT =
+  'https://jobicy.com/api/v2/remote-jobs?count=100'
+
+const JSEARCH_ENDPOINT =
+  'https://jsearch.p.rapidapi.com/search'
+
+const JSEARCH_API_KEY =
+  String(import.meta.env.VITE_JSEARCH_API_KEY ?? '')
+
+const FETCH_TIMEOUT_MS = 8000
+
+const SOURCE_CACHE_TTL_MS =
+  30 * 60 * 1000
+
+const JSEARCH_CACHE_TTL_MS =
+  24 * 60 * 60 * 1000
+
+const AGGREGATE_CACHE_TTL_MS =
+  10 * 60 * 1000
+
+const DEBUG_JOB_ENGINE =
+  String(import.meta.env.VITE_DEBUG_JOB_ENGINE ?? 'true') ===
+  'true'
+
+const AGGREGATE_CACHE_KEY =
+  'jobEngine_aggregate_v2'
+
+/* -------------------------------------------------------------------------- */
+/* HELPERS                                                                    */
+/* -------------------------------------------------------------------------- */
+
+const sleep = (
+  ms: number
+): Promise<void> =>
+  new Promise((resolve) =>
+    setTimeout(resolve, ms)
+  )
+
+const debugLog = (
+  ...args: unknown[]
+): void => {
+  if (DEBUG_JOB_ENGINE) {
+    console.debug('[jobEngine]', ...args)
   }
 }
 
-const normalizeText = (value?: string): string =>
+const debugWarn = (
+  ...args: unknown[]
+): void => {
+  if (DEBUG_JOB_ENGINE) {
+    console.warn('[jobEngine]', ...args)
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* NORMALIZATION                                                              */
+/* -------------------------------------------------------------------------- */
+
+const normalizeText = (
+  value?: unknown
+): string =>
   String(value ?? '')
     .toLowerCase()
     .trim()
@@ -41,390 +90,1455 @@ const normalizeText = (value?: string): string =>
     .replace(/[-_]+/g, ' ')
     .replace(/\s+/g, ' ')
 
-const normalizeUrl = (rawUrl?: string): string | undefined => {
-  if (!rawUrl) return undefined
-  const url = String(rawUrl).trim()
-  if (!url || url.includes('google.com/search')) return undefined
-  return url
-}
+const normalizeJob = (
+  job: Job
+): Job => {
+  const title =
+    String(job.title ?? 'Job').trim()
 
-const normalizeTags = (rawTags: unknown): string[] | undefined => {
-  if (Array.isArray(rawTags)) {
-    return rawTags.map((item) => String(item ?? '').trim()).filter(Boolean)
-  }
-  if (typeof rawTags === 'string' && rawTags.trim()) {
-    return rawTags
-      .split(/[,;|]/)
-      .map((item) => String(item).trim())
-      .filter(Boolean)
-  }
-  return undefined
-}
+  const company =
+    String(
+      job.company_name ?? 'Unknown'
+    ).trim()
 
-const normalizeJobKey = (job: Job & { source?: string }): string => {
-  const source = normalizeText(job.source ?? 'unknown')
-  const identity = String(job.id ?? job.url ?? '').trim()
-  if (identity) return `${source}|${identity}`
+  const location =
+    String(
+      job.candidate_required_location ??
+        (job as any).location ??
+        'Remote'
+    ).trim()
 
-  const company = normalizeText(job.company_name)
-  const title = normalizeText(job.title)
-  const location = normalizeText(job.candidate_required_location)
-  return `${source}|${company}|${title}|${location}`
-}
+  const url =
+    String(job.url ?? '').trim()
 
-const normalizeJob = (job: Job & { source?: string }): Job => {
-  const title = String(job.title ?? 'Job').trim() || 'Job'
-  const company_name = String(job.company_name ?? 'Unknown').trim() || 'Unknown'
-  const candidate_required_location =
-    String(job.candidate_required_location ?? (job as any).location ?? 'Remote').trim() || 'Remote'
-  const url = normalizeUrl(job.url) ?? '/apply'
-  const id = !['', 'undefined', 'null'].includes(String(job.id ?? '').trim())
-    ? String(job.id)
-    : `${normalizeText(title)}-${normalizeText(company_name)}-${normalizeText(candidate_required_location)}`
+  const id =
+    String(
+      job.id ??
+        `${title}-${company}-${location}-${url}`
+    ).trim()
 
   return {
     ...job,
     id,
     title,
-    company_name,
-    candidate_required_location,
-    url,
-    category: String(job.category ?? (job as any).job_category ?? 'Other').trim() || 'Other',
-    job_type: String(job.job_type ?? (job as any).employment_type ?? (job as any).type ?? 'Remote').trim() || 'Remote',
-    publication_date: String(job.publication_date ?? '').trim() || undefined,
-    company_logo: String(job.company_logo ?? '').trim() || undefined,
-    description: String(job.description ?? (job as any).details ?? '').trim() || undefined,
-    tags: normalizeTags((job as any).tags) ?? normalizeTags((job as any).tag_list) ?? undefined,
-    source: job.source,
+    company_name: company,
+    candidate_required_location:
+      location || 'Remote',
+    url: url || undefined,
+    company_logo:
+      String(job.company_logo ?? '').trim(),
   }
 }
 
-const sessionCacheKey = (key: string): string => `jobEngine_cache_${key}`
+/* -------------------------------------------------------------------------- */
+/* DEDUPLICATION                                                              */
+/* -------------------------------------------------------------------------- */
 
-const readSessionCache = <T>(key: string): T | null => {
+const getJobKey = (
+  job: Job
+): string => {
+  const company =
+    normalizeText(job.company_name)
+
+  const title =
+    normalizeText(job.title)
+
+  const location =
+    normalizeText(
+      job.candidate_required_location
+    )
+
+  /*
+   * URL is used when available.
+   * Otherwise title + company + location.
+   */
+  const url =
+    normalizeText(job.url)
+
+  if (url) {
+    return `url:${url}`
+  }
+
+  return `job:${company}|${title}|${location}`
+}
+
+export const mergeJobs = (
+  jobs: Job[]
+): Job[] => {
+  const seen =
+    new Map<string, Job>()
+
+  for (const rawJob of jobs) {
+    if (!rawJob) {
+      continue
+    }
+
+    const job =
+      normalizeJob(rawJob)
+
+    /*
+     * Ignore completely invalid records.
+     */
+    if (!job.title) {
+      continue
+    }
+
+    const key =
+      getJobKey(job)
+
+    /*
+     * Keep first occurrence.
+     */
+    if (!seen.has(key)) {
+      seen.set(key, job)
+    }
+  }
+
+  return Array.from(
+    seen.values()
+  )
+}
+
+/* -------------------------------------------------------------------------- */
+/* FETCH WITH TIMEOUT                                                         */
+/* -------------------------------------------------------------------------- */
+
+const fetchWithTimeout = async (
+  url: string,
+  options: RequestInit = {},
+  timeoutMs = FETCH_TIMEOUT_MS
+): Promise<Response> => {
+  const controller =
+    new AbortController()
+
+  const timeoutId =
+    setTimeout(
+      () => controller.abort(),
+      timeoutMs
+    )
+
   try {
-    const raw = sessionStorage.getItem(key)
-    if (!raw) return null
-    const parsed = JSON.parse(raw)
-    if (!parsed || typeof parsed !== 'object') return null
-    if (Date.now() - Number(parsed.ts) > SESSION_TTL_MS) {
+    return await fetch(
+      url,
+      {
+        ...options,
+        signal:
+          options.signal ??
+          controller.signal,
+      }
+    )
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* PROXY FETCH                                                                */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * IMPORTANT:
+ *
+ * Browser applications cannot reliably call every public job API directly
+ * because of CORS.
+ *
+ * We therefore try several public proxy routes.
+ *
+ * If one proxy returns 429/5xx, we immediately try another route instead
+ * of making many repeated retries against the same failing proxy.
+ */
+
+const buildProxyUrls = (
+  endpoint: string
+): string[] => {
+  const encoded =
+    encodeURIComponent(endpoint)
+
+  return [
+    /*
+     * Proxy 1
+     */
+    `https://api.allorigins.win/raw?url=${encoded}`,
+
+    /*
+     * Proxy 2
+     */
+    `https://corsproxy.io/?url=${encoded}`,
+
+    /*
+     * Proxy 3
+     */
+    `https://api.codetabs.com/v1/proxy?quest=${encoded}`,
+  ]
+}
+
+const fetchThroughProxies = async (
+  endpoint: string
+): Promise<Response | null> => {
+  const proxyUrls =
+    buildProxyUrls(endpoint)
+
+  for (
+    const proxyUrl of proxyUrls
+  ) {
+    try {
+      debugLog(
+        'Trying proxy:',
+        proxyUrl
+      )
+
+      const response =
+        await fetchWithTimeout(
+          proxyUrl
+        )
+
+      if (response.ok) {
+        return response
+      }
+
+      debugWarn(
+        'Proxy failed:',
+        response.status,
+        proxyUrl
+      )
+
+      /*
+       * Do not retry the same proxy when it returns
+       * 429 or server errors.
+       */
+      continue
+    } catch (error) {
+      debugWarn(
+        'Proxy request failed:',
+        error
+      )
+    }
+  }
+
+  return null
+}
+
+/* -------------------------------------------------------------------------- */
+/* SOURCE CACHE                                                               */
+/* -------------------------------------------------------------------------- */
+
+type SourceCache = {
+  ts: number
+  data: Job[]
+}
+
+const readSourceCache = (
+  key: string
+): Job[] | null => {
+  try {
+    const raw =
+      sessionStorage.getItem(key)
+
+    if (!raw) {
+      return null
+    }
+
+    const parsed =
+      JSON.parse(raw) as SourceCache
+
+    if (
+      !parsed ||
+      !Array.isArray(parsed.data)
+    ) {
+      return null
+    }
+
+    const age =
+      Date.now() -
+      Number(parsed.ts ?? 0)
+
+    if (
+      age >= SOURCE_CACHE_TTL_MS
+    ) {
+      return null
+    }
+
+    /*
+     * NEVER accept an empty cache.
+     */
+    if (
+      parsed.data.length === 0
+    ) {
       sessionStorage.removeItem(key)
       return null
     }
-    return Array.isArray(parsed.data) ? parsed.data : null
+
+    return mergeJobs(parsed.data)
   } catch {
     return null
   }
 }
 
-const writeSessionCache = <T>(key: string, data: T): void => {
+const writeSourceCache = (
+  key: string,
+  jobs: Job[]
+): void => {
+  /*
+   * NEVER cache [].
+   */
+  if (
+    !Array.isArray(jobs) ||
+    jobs.length === 0
+  ) {
+    return
+  }
+
   try {
-    sessionStorage.setItem(key, JSON.stringify({ ts: Date.now(), data }))
+    sessionStorage.setItem(
+      key,
+      JSON.stringify({
+        ts: Date.now(),
+        data: jobs,
+      })
+    )
   } catch {
-    /* ignore cache failures */
+    /*
+     * Cache failure is non-fatal.
+     */
   }
 }
 
-const clearSessionCaches = (): void => {
-  ['remotive', 'arbeitnow', 'jobicy', 'rozee'].forEach((key) => {
+/* -------------------------------------------------------------------------- */
+/* FIREBASE                                                                   */
+/* -------------------------------------------------------------------------- */
+
+const safeFetchCustomJobs =
+  async (): Promise<Job[]> => {
     try {
-      sessionStorage.removeItem(sessionCacheKey(key))
-    } catch {
-      /* ignore */
+      const jobs =
+        await Promise.race([
+          fetchCustomJobs(),
+
+          new Promise<Job[]>(
+            (resolve) =>
+              setTimeout(
+                () => resolve([]),
+                5000
+              )
+          ),
+        ])
+
+      return Array.isArray(jobs)
+        ? mergeJobs(jobs)
+        : []
+    } catch (error) {
+      debugWarn(
+        'Firebase jobs failed:',
+        error
+      )
+
+      return []
     }
-  })
-}
+  }
 
-const getAbortController = () => {
-  const controller = new AbortController()
-  const timeoutId = window.setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
-  return { controller, timeoutId }
-}
+/* -------------------------------------------------------------------------- */
+/* REMOTIVE                                                                   */
+/* -------------------------------------------------------------------------- */
 
-const fetchWithProxy = async (endpoint: string, signal: AbortSignal): Promise<Response | null> => {
-  const primary = `https://api.allorigins.win/raw?url=${encodeURIComponent(endpoint)}`
-  const fallback = `https://corsproxy.io/?${encodeURIComponent(endpoint)}`
+const safeFetchRemotiveJobs =
+  async (): Promise<Job[]> => {
+    const cacheKey =
+      'jobEngine_cache_remotive_v2'
 
-  try {
-    return await fetchWithRetry(primary, { method: 'GET', signal }, 2, 1000)
-  } catch {
+    const cached =
+      readSourceCache(cacheKey)
+
+    if (cached) {
+      debugLog(
+        'Remotive cache:',
+        cached.length
+      )
+
+      return cached
+    }
+
     try {
-      return await fetchWithRetry(fallback, { method: 'GET', signal }, 1, 1000)
-    } catch (err) {
-      console.warn('[jobEngine] proxy fetch failed:', endpoint, err)
+      const response =
+        await fetchThroughProxies(
+          REMOTIVE_ENDPOINT
+        )
+
+      if (!response) {
+        return []
+      }
+
+      const json =
+        await response.json()
+
+      const items =
+        Array.isArray(json?.jobs)
+          ? json.jobs
+          : []
+
+      const jobs: Job[] =
+        items.map(
+          (item: any): Job => ({
+            id:
+              item.id ??
+              `${item.title}-${item.company_name}`,
+
+            title:
+              item.title ??
+              'Job',
+
+            company_name:
+              item.company_name ??
+              'Unknown',
+
+            candidate_required_location:
+              item.candidate_required_location ??
+              item.location ??
+              'Remote',
+
+            url:
+              item.url ??
+              item.apply_url,
+
+            publication_date:
+              item.publication_date ??
+              item.created_at,
+
+            description:
+              item.description,
+
+            category:
+              item.category,
+
+            job_type:
+              item.job_type,
+
+            company_logo:
+              item.company_logo,
+
+            tags:
+              Array.isArray(item.tags)
+                ? item.tags
+                : undefined,
+          })
+        )
+
+      const normalized =
+        mergeJobs(jobs)
+
+      writeSourceCache(
+        cacheKey,
+        normalized
+      )
+
+      return normalized
+    } catch (error) {
+      debugWarn(
+        'Remotive failed:',
+        error
+      )
+
+      return []
+    }
+  }
+
+/* -------------------------------------------------------------------------- */
+/* ARBEITNOW                                                                  */
+/* -------------------------------------------------------------------------- */
+
+const safeFetchArbeitnowJobs =
+  async (): Promise<Job[]> => {
+    const cacheKey =
+      'jobEngine_cache_arbeitnow_v2'
+
+    const cached =
+      readSourceCache(cacheKey)
+
+    if (cached) {
+      debugLog(
+        'Arbeitnow cache:',
+        cached.length
+      )
+
+      return cached
+    }
+
+    try {
+      const response =
+        await fetchThroughProxies(
+          ARBEITNOW_ENDPOINT
+        )
+
+      if (!response) {
+        return []
+      }
+
+      const json =
+        await response.json()
+
+      const items =
+        Array.isArray(json?.data)
+          ? json.data
+          : []
+
+      const jobs: Job[] =
+        items.map(
+          (item: any): Job => ({
+            id:
+              item.slug ??
+              item.id ??
+              `${item.title}-${item.company_name}`,
+
+            title:
+              item.title ??
+              'Job',
+
+            company_name:
+              item.company_name ??
+              item.company ??
+              'Unknown',
+
+            candidate_required_location:
+              item.location ??
+              (
+                item.remote
+                  ? 'Remote'
+                  : 'Unknown'
+              ),
+
+            url:
+              item.url ??
+              item.redirect_url ??
+              item.job_ad_link,
+
+            publication_date:
+              item.created_at ??
+              item.publication_date,
+
+            description:
+              item.description ??
+              item.details,
+
+            category:
+              item.job_type ??
+              '',
+
+            job_type:
+              Array.isArray(
+                item.job_types
+              )
+                ? item.job_types.join(
+                    ', '
+                  )
+                : item.job_type ??
+                  item.employment_type,
+
+            company_logo:
+              item.company_logo,
+
+            tags:
+              Array.isArray(item.tags)
+                ? item.tags.map(
+                    (tag: unknown) =>
+                      String(tag)
+                  )
+                : undefined,
+          })
+        )
+
+      const normalized =
+        mergeJobs(jobs)
+
+      writeSourceCache(
+        cacheKey,
+        normalized
+      )
+
+      return normalized
+    } catch (error) {
+      debugWarn(
+        'Arbeitnow failed:',
+        error
+      )
+
+      return []
+    }
+  }
+
+/* -------------------------------------------------------------------------- */
+/* JOBICY                                                                    */
+/* -------------------------------------------------------------------------- */
+
+const safeFetchJobicyJobs =
+  async (): Promise<Job[]> => {
+    const cacheKey =
+      'jobEngine_cache_jobicy_v2'
+
+    const cached =
+      readSourceCache(cacheKey)
+
+    if (cached) {
+      debugLog(
+        'Jobicy cache:',
+        cached.length
+      )
+
+      return cached
+    }
+
+    try {
+      const response =
+        await fetchThroughProxies(
+          JOBICY_ENDPOINT
+        )
+
+      if (!response) {
+        return []
+      }
+
+      const json =
+        await response.json()
+
+      const items =
+        Array.isArray(json?.jobs)
+          ? json.jobs
+          : Array.isArray(json?.results)
+          ? json.results
+          : Array.isArray(json?.data)
+          ? json.data
+          : []
+
+      const jobs: Job[] =
+        items.map(
+          (item: any): Job => ({
+            id:
+              item.id ??
+              item.uuid ??
+              `${item.title}-${item.company_name}`,
+
+            title:
+              item.title ??
+              item.role ??
+              'Job',
+
+            company_name:
+              item.company_name ??
+              item.company ??
+              item.employer_name ??
+              'Unknown',
+
+            candidate_required_location:
+              item.location ??
+              item.candidate_required_location ??
+              (
+                item.remote
+                  ? 'Remote'
+                  : 'Unknown'
+              ),
+
+            url:
+              item.url ??
+              item.apply_url ??
+              item.job_url ??
+              item.link,
+
+            publication_date:
+              item.created_at ??
+              item.posted_at ??
+              item.publication_date,
+
+            description:
+              item.description ??
+              item.summary,
+
+            category:
+              item.category ??
+              item.job_category,
+
+            job_type:
+              item.job_type ??
+              item.employment_type ??
+              item.type,
+
+            company_logo:
+              item.company_logo,
+
+            tags:
+              Array.isArray(item.tags)
+                ? item.tags.map(
+                    (tag: unknown) =>
+                      String(tag)
+                  )
+                : typeof item.tags ===
+                    'string'
+                ? item.tags
+                    .split(/[,;|]/)
+                    .map(
+                      (tag: string) =>
+                        tag.trim()
+                    )
+                    .filter(Boolean)
+                : undefined,
+          })
+        )
+
+      const normalized =
+        mergeJobs(jobs)
+
+      writeSourceCache(
+        cacheKey,
+        normalized
+      )
+
+      return normalized
+    } catch (error) {
+      debugWarn(
+        'Jobicy failed:',
+        error
+      )
+
+      return []
+    }
+  }
+
+/* -------------------------------------------------------------------------- */
+/* ROZEE                                                                     */
+/* -------------------------------------------------------------------------- */
+
+const safeFetchRozeeJobs =
+  async (): Promise<Job[]> => {
+    const cacheKey =
+      'jobEngine_cache_rozee_v2'
+
+    const cached =
+      readSourceCache(cacheKey)
+
+    if (cached) {
+      debugLog(
+        'Rozee cache:',
+        cached.length
+      )
+
+      return cached
+    }
+
+    try {
+      const jobs =
+        await fetchRozeeJobs()
+
+      const normalized =
+        Array.isArray(jobs)
+          ? mergeJobs(jobs)
+          : []
+
+      writeSourceCache(
+        cacheKey,
+        normalized
+      )
+
+      return normalized
+    } catch (error) {
+      debugWarn(
+        'Rozee failed:',
+        error
+      )
+
+      return []
+    }
+  }
+
+/* -------------------------------------------------------------------------- */
+/* JSEARCH FIRESTORE CACHE                                                    */
+/* -------------------------------------------------------------------------- */
+
+const isCacheFresh = (
+  timestamp: unknown
+): boolean => {
+  if (!timestamp) {
+    return false
+  }
+
+  if (
+    timestamp instanceof Timestamp
+  ) {
+    return (
+      Date.now() -
+        timestamp.toMillis() <
+      JSEARCH_CACHE_TTL_MS
+    )
+  }
+
+  const date =
+    new Date(
+      String(timestamp)
+    )
+
+  if (
+    Number.isNaN(
+      date.getTime()
+    )
+  ) {
+    return false
+  }
+
+  return (
+    Date.now() -
+      date.getTime() <
+    JSEARCH_CACHE_TTL_MS
+  )
+}
+
+const fetchCachedJSearchJobs =
+  async (): Promise<Job[]> => {
+    if (!JSEARCH_API_KEY) {
+      debugWarn(
+        'JSearch API key is missing.'
+      )
+
+      return []
+    }
+
+    try {
+      const db =
+        getFirestore(
+          firebaseApp
+        )
+
+      const cacheRef =
+        doc(
+          collection(
+            db,
+            'cached_jsearch_results'
+          ),
+          'latest'
+        )
+
+      const cacheSnap =
+        await getDoc(cacheRef)
+
+      /*
+       * FIRST: use Firestore cache.
+       */
+      if (cacheSnap.exists()) {
+        const cached =
+          cacheSnap.data() as {
+            jobs?: Job[]
+            updatedAt?: unknown
+          }
+
+        if (
+          Array.isArray(
+            cached.jobs
+          ) &&
+          cached.jobs.length > 0 &&
+          isCacheFresh(
+            cached.updatedAt
+          )
+        ) {
+          debugLog(
+            'JSearch Firestore cache:',
+            cached.jobs.length
+          )
+
+          return mergeJobs(
+            cached.jobs
+          )
+        }
+      }
+
+      /*
+       * Cache expired.
+       *
+       * Make ONE API request.
+       */
+      const queries = [
+        'software developer jobs Pakistan',
+        'software engineer jobs Pakistan',
+        'frontend developer jobs Pakistan',
+        'backend developer jobs Pakistan',
+        'full stack developer jobs Pakistan',
+      ]
+
+      const queryResults =
+        await Promise.allSettled(
+          queries.map(
+            async (query) => {
+              const url =
+                new URL(
+                  JSEARCH_ENDPOINT
+                )
+
+              url.searchParams.set(
+                'query',
+                query
+              )
+
+              url.searchParams.set(
+                'num_pages',
+                '1'
+              )
+
+              const response =
+                await fetchWithTimeout(
+                  url.toString(),
+                  {
+                    method: 'GET',
+
+                    headers: {
+                      'Content-Type':
+                        'application/json',
+
+                      'X-RapidAPI-Key':
+                        JSEARCH_API_KEY,
+
+                      'X-RapidAPI-Host':
+                        'jsearch.p.rapidapi.com',
+                    },
+                  },
+                  8000
+                )
+
+              if (!response.ok) {
+                throw new Error(
+                  `JSearch ${response.status}`
+                )
+              }
+
+              const json =
+                await response.json()
+
+              return Array.isArray(
+                json?.data
+              )
+                ? json.data
+                : []
+            }
+          )
+        )
+
+      const rawItems =
+        queryResults.flatMap(
+          (result) =>
+            result.status ===
+              'fulfilled'
+              ? result.value
+              : []
+        )
+
+      const jobs: Job[] =
+        rawItems.map(
+          (item: any): Job => ({
+            id:
+              item.job_id ??
+              item.id ??
+              `${item.job_title}-${item.employer_name}`,
+
+            title:
+              item.job_title ??
+              item.title ??
+              'Job',
+
+            company_name:
+              item.employer_name ??
+              item.company_name ??
+              item.company ??
+              'Unknown',
+
+            candidate_required_location:
+              item.job_city ??
+              item.job_state ??
+              item.job_country ??
+              item.location ??
+              'Remote',
+
+            url:
+              item.job_apply_link ??
+              item.job_link ??
+              item.url,
+
+            publication_date:
+              item.job_posted_at ??
+              item.publication_date,
+
+            description:
+              item.job_description ??
+              item.description,
+
+            category:
+              item.job_category ??
+              item.category,
+
+            job_type:
+              item.job_employment_type ??
+              item.job_type,
+
+            company_logo:
+              item.employer_logo,
+          })
+        )
+
+      const normalized =
+        mergeJobs(jobs)
+
+      /*
+       * NEVER overwrite useful cache with [].
+       */
+      if (
+        normalized.length > 0
+      ) {
+        await setDoc(
+          cacheRef,
+          {
+            jobs: normalized,
+            updatedAt:
+              serverTimestamp(),
+          }
+        )
+
+        return normalized
+      }
+
+      /*
+       * If API produced nothing, return old cache.
+       */
+      if (cacheSnap.exists()) {
+        const cached =
+          cacheSnap.data() as {
+            jobs?: Job[]
+          }
+
+        if (
+          Array.isArray(
+            cached.jobs
+          ) &&
+          cached.jobs.length > 0
+        ) {
+          return mergeJobs(
+            cached.jobs
+          )
+        }
+      }
+
+      return []
+    } catch (error) {
+      debugWarn(
+        'JSearch failed:',
+        error
+      )
+
+      /*
+       * Stale cache fallback.
+       */
+      try {
+        const db =
+          getFirestore(
+            firebaseApp
+          )
+
+        const cacheRef =
+          doc(
+            collection(
+              db,
+              'cached_jsearch_results'
+            ),
+            'latest'
+          )
+
+        const cacheSnap =
+          await getDoc(cacheRef)
+
+        if (
+          cacheSnap.exists()
+        ) {
+          const cached =
+            cacheSnap.data() as {
+              jobs?: Job[]
+            }
+
+          if (
+            Array.isArray(
+              cached.jobs
+            ) &&
+            cached.jobs.length > 0
+          ) {
+            return mergeJobs(
+              cached.jobs
+            )
+          }
+        }
+      } catch {
+        /*
+         * Secondary cache failure
+         * is non-fatal.
+         */
+      }
+
+      return []
+    }
+  }
+
+/* -------------------------------------------------------------------------- */
+/* AGGREGATE CACHE                                                            */
+/* -------------------------------------------------------------------------- */
+
+type AggregateCache = {
+  ts: number
+  jobs: Job[]
+  source: string
+}
+
+const readAggregateCache =
+  (): {
+    jobs: Job[]
+    source: string
+  } | null => {
+    try {
+      const raw =
+        sessionStorage.getItem(
+          AGGREGATE_CACHE_KEY
+        )
+
+      if (!raw) {
+        return null
+      }
+
+      const parsed =
+        JSON.parse(raw) as AggregateCache
+
+      if (
+        !parsed ||
+        !Array.isArray(
+          parsed.jobs
+        )
+      ) {
+        return null
+      }
+
+      const age =
+        Date.now() -
+        Number(parsed.ts ?? 0)
+
+      if (
+        age >=
+        AGGREGATE_CACHE_TTL_MS
+      ) {
+        return null
+      }
+
+      /*
+       * Critical:
+       * empty aggregate cache is NEVER valid.
+       */
+      if (
+        parsed.jobs.length === 0
+      ) {
+        sessionStorage.removeItem(
+          AGGREGATE_CACHE_KEY
+        )
+
+        return null
+      }
+
+      return {
+        jobs: mergeJobs(
+          parsed.jobs
+        ),
+        source:
+          parsed.source ||
+          'session_cache',
+      }
+    } catch {
       return null
     }
   }
-}
 
-const safeFetchCustomJobs = async (): Promise<Job[]> => {
+const writeAggregateCache = (
+  jobs: Job[],
+  source: string
+): void => {
+  if (
+    !Array.isArray(jobs) ||
+    jobs.length === 0
+  ) {
+    return
+  }
+
   try {
-    return await Promise.race([fetchCustomJobs(), new Promise<Job[]>((resolve) => setTimeout(() => resolve([]), 1500))])
-  } catch (err) {
-    console.warn('[jobEngine] fetchCustomJobs failed:', err)
-    return []
+    sessionStorage.setItem(
+      AGGREGATE_CACHE_KEY,
+      JSON.stringify({
+        ts: Date.now(),
+        jobs,
+        source,
+      })
+    )
+  } catch {
+    /*
+     * Non-fatal.
+     */
   }
 }
 
-const safeFetchRemotiveJobs = async (): Promise<Job[]> => {
-  const cacheKey = sessionCacheKey('remotive')
-  const cached = readSessionCache<Job[]>(cacheKey)
-  if (cached) return cached
+/* -------------------------------------------------------------------------- */
+/* IN-FLIGHT REQUEST                                                          */
+/* -------------------------------------------------------------------------- */
 
-  const { controller, timeoutId } = getAbortController()
-  try {
-    const response = await fetchWithProxy(REMOTIVE_ENDPOINT, controller.signal)
-    if (!response?.ok) return []
-    const json = (await response.json()) as { jobs?: Job[] }
-    const jobs = Array.isArray(json.jobs) ? json.jobs : []
-    writeSessionCache(cacheKey, jobs)
-    return jobs
-  } catch (err) {
-    console.warn('[jobEngine] Remotive fetch failed:', err)
-    return []
-  } finally {
-    window.clearTimeout(timeoutId)
-  }
-}
+let inFlightRequest:
+  | Promise<{
+      jobs: Job[]
+      source: string
+    }>
+  | null = null
 
-const safeFetchArbeitnowJobs = async (): Promise<Job[]> => {
-  const cacheKey = sessionCacheKey('arbeitnow')
-  const cached = readSessionCache<Job[]>(cacheKey)
-  if (cached) return cached
+/* -------------------------------------------------------------------------- */
+/* LOAD ALL SOURCES                                                           */
+/* -------------------------------------------------------------------------- */
 
-  const { controller, timeoutId } = getAbortController()
-  try {
-    const response = await fetchWithProxy(ARBEITNOW_ENDPOINT, controller.signal)
-    if (!response?.ok) return []
-    const json = await response.json()
-    const items = Array.isArray(json.data) ? json.data : Array.isArray(json) ? json : []
-    const jobs = items.map((item: any): Job => ({
-      id: item.slug ?? item.id ?? `${item.title}-${item.company_name ?? item.company}`,
-      title: item.title ?? 'Job',
-      company_name: item.company_name ?? item.company ?? 'Unknown',
-      candidate_required_location:
-        item.location || (item.remote ? 'Remote' : undefined) || item.candidate_required_location,
-      url: item.url ?? item.redirect_url ?? item.job_ad_link,
-      publication_date: item.created_at ?? item.publication_date,
-      description: item.description ?? item.details,
-      category: item.tags ? (Array.isArray(item.tags) ? String(item.tags[0] ?? '') : String(item.tags)) : item.job_type,
-      job_type: Array.isArray(item.job_types)
-        ? item.job_types.join(', ')
-        : item.job_type ?? item.employment_type,
-      company_logo: item.company_logo,
-      tags: Array.isArray(item.tags)
-        ? item.tags.map((tag: any) => String(tag))
-        : typeof item.tags === 'string'
-        ? item.tags.split(/[,;|]/).map((tag: string) => tag.trim()).filter(Boolean)
-        : undefined,
-    }))
-    writeSessionCache(cacheKey, jobs)
-    return jobs
-  } catch (err) {
-    console.warn('[jobEngine] Arbeitnow fetch failed:', err)
-    return []
-  } finally {
-    window.clearTimeout(timeoutId)
-  }
-}
+const loadAllSources =
+  async (): Promise<{
+    jobs: Job[]
+    source: string
+  }> => {
+    /*
+     * Use non-empty aggregate cache.
+     */
+    const cached =
+      readAggregateCache()
 
-const safeFetchJobicyJobs = async (): Promise<Job[]> => {
-  const cacheKey = sessionCacheKey('jobicy')
-  const cached = readSessionCache<Job[]>(cacheKey)
-  if (cached) return cached
+    if (cached) {
+      debugLog(
+        'Using aggregate cache:',
+        cached.jobs.length
+      )
 
-  const { controller, timeoutId } = getAbortController()
-  try {
-    const response = await fetchWithProxy(JOBICY_ENDPOINT, controller.signal)
-    if (!response?.ok) return []
-    const json = await response.json()
-    const items = Array.isArray(json.jobs)
-      ? json.jobs
-      : Array.isArray(json.results)
-      ? json.results
-      : Array.isArray(json.data)
-      ? json.data
-      : []
-    const jobs = items.map((item: any): Job => ({
-      id: item.id ?? item.uuid ?? `${item.title}-${item.company_name ?? item.company}`,
-      title: item.title ?? item.role ?? 'Job',
-      company_name: item.company_name ?? item.company ?? item.employer_name ?? 'Unknown',
-      candidate_required_location:
-        item.location || item.candidate_required_location || (item.remote ? 'Remote' : undefined),
-      url: item.url ?? item.apply_url ?? item.job_url ?? item.link,
-      publication_date: item.created_at ?? item.posted_at ?? item.publication_date,
-      description: item.description ?? item.summary,
-      category: item.category ?? item.job_category,
-      job_type: item.job_type ?? item.employment_type ?? item.type,
-      company_logo: item.company_logo,
-      tags: Array.isArray(item.tags)
-        ? item.tags.map((tag: any) => String(tag))
-        : typeof item.tags === 'string'
-        ? item.tags.split(/[,;|]/).map((tag: string) => tag.trim()).filter(Boolean)
-        : undefined,
-    }))
-    writeSessionCache(cacheKey, jobs)
-    return jobs
-  } catch (err) {
-    console.warn('[jobEngine] Jobicy fetch failed:', err)
-    return []
-  } finally {
-    window.clearTimeout(timeoutId)
-  }
-}
-
-const safeFetchRozeeCached = async (): Promise<Job[]> => {
-  const cacheKey = sessionCacheKey('rozee')
-  const cached = readSessionCache<Job[]>(cacheKey)
-  if (cached) return cached
-
-  const { controller, timeoutId } = getAbortController()
-  try {
-    const jobs = await fetchRozeeJobs()
-    writeSessionCache(cacheKey, jobs)
-    return jobs
-  } catch (err) {
-    console.warn('[jobEngine] Rozee fetch failed:', err)
-    return []
-  } finally {
-    window.clearTimeout(timeoutId)
-  }
-}
-
-const isCacheFresh = (timestamp: unknown): boolean => {
-  if (!timestamp) return false
-  if (timestamp instanceof Timestamp) {
-    return Date.now() - timestamp.toMillis() < CACHE_TTL_MS
-  }
-  const parsed = new Date(String(timestamp))
-  return !Number.isNaN(parsed.getTime()) && Date.now() - parsed.getTime() < CACHE_TTL_MS
-}
-
-const fetchCachedJSearchJobs = async (): Promise<Job[]> => {
-  if (!JSEARCH_API_KEY) return []
-
-  try {
-    const db = getFirestore(firebaseApp)
-    const cacheRef = doc(collection(db, 'cached_jsearch_results'), 'latest')
-    const cacheSnap = await getDoc(cacheRef)
-    if (cacheSnap.exists()) {
-      const cached = cacheSnap.data() as { jobs?: Job[]; updatedAt?: unknown }
-      if (Array.isArray(cached.jobs) && isCacheFresh(cached.updatedAt)) {
-        return cached.jobs
-      }
+      return cached
     }
 
-    const queries = [
-      'remote software developer',
-      'react developer',
-      'data science remote',
-      'product manager',
-      'marketing remote',
+    /*
+     * IMPORTANT:
+     *
+     * Every source is independent.
+     * One failure must NOT kill the others.
+     */
+    const sources = [
+      {
+        name: 'firebase',
+        promise:
+          safeFetchCustomJobs(),
+      },
+
+      {
+        name: 'rozee',
+        promise:
+          safeFetchRozeeJobs(),
+      },
+
+      {
+        name: 'remotive',
+        promise:
+          safeFetchRemotiveJobs(),
+      },
+
+      {
+        name: 'arbeitnow',
+        promise:
+          safeFetchArbeitnowJobs(),
+      },
+
+      {
+        name: 'jobicy',
+        promise:
+          safeFetchJobicyJobs(),
+      },
+
+      {
+        name: 'jsearch',
+        promise:
+          fetchCachedJSearchJobs(),
+      },
     ]
 
-    const collected: Job[] = []
-    for (const query of queries) {
-      const url = new URL(JSEARCH_ENDPOINT)
-      url.searchParams.set('query', query)
-      url.searchParams.set('num_pages', '2')
+    const results =
+      await Promise.allSettled(
+        sources.map(
+          (source) =>
+            source.promise
+        )
+      )
 
-      const response = await fetch(url.toString(), {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-RapidAPI-Key': JSEARCH_API_KEY,
-          'X-RapidAPI-Host': 'jsearch.p.rapidapi.com',
-        },
-      })
-      if (!response.ok) continue
+    /*
+     * Collect ONLY successful arrays.
+     */
+    const rawJobs =
+      results.flatMap(
+        (result) => {
+          if (
+            result.status !==
+              'fulfilled' ||
+            !Array.isArray(
+              result.value
+            )
+          ) {
+            return []
+          }
 
-      const json = await response.json()
-      const items = Array.isArray(json.data) ? json.data : []
-      for (const item of items) {
-        collected.push({
-          id: item.job_id ?? item.id ?? `${item.title}-${item.company_name ?? item.company}`,
-          title: item.job_title ?? item.title ?? 'Job',
-          company_name: item.employer_name ?? item.company_name ?? item.company ?? 'Unknown',
-          candidate_required_location:
-            item.job_city ?? item.location ?? item.candidate_required_location ?? 'Remote',
-          url: item.job_apply_link ?? item.job_link ?? item.url,
-          publication_date: item.job_posted_at ?? item.publication_date,
-          description: item.job_description ?? item.description,
-          category: item.job_category ?? item.category,
-          job_type: item.job_employment_type ?? item.job_type ?? 'Remote',
-          company_logo: item.company_logo,
-          tags: normalizeTags(item.tags) ?? undefined,
-          source: 'jsearch',
-        })
-      }
+          return result.value
+        }
+      )
+
+    /*
+     * Determine which sources actually returned data.
+     */
+    const sourceParts =
+      results
+        .map(
+          (
+            result,
+            index
+          ) => ({
+            result,
+            name:
+              sources[index]
+                .name,
+          })
+        )
+        .filter(
+          (item) =>
+            item.result.status ===
+              'fulfilled' &&
+            Array.isArray(
+              item.result.value
+            ) &&
+            item.result.value.length >
+              0
+        )
+        .map(
+          (item) =>
+            item.name
+        )
+
+    let source =
+      sourceParts.length > 0
+        ? sourceParts.join('+')
+        : 'none'
+
+    /*
+     * Merge ALL successful sources.
+     */
+    let combinedJobs =
+      mergeJobs(rawJobs)
+
+    /*
+     * ONLY use local fallback when ALL live/cached
+     * sources returned zero usable jobs.
+     */
+    if (
+      combinedJobs.length === 0
+    ) {
+      combinedJobs =
+        mergeJobs(
+          pakistanJobs
+        )
+
+      source =
+        combinedJobs.length > 0
+          ? 'local_fallback'
+          : 'none'
     }
 
-    try {
-      await setDoc(cacheRef, {
-        jobs: collected,
-        updatedAt: serverTimestamp(),
-      })
-    } catch {
-      /* ignore */
+    /*
+     * Store only useful results.
+     */
+    if (
+      combinedJobs.length > 0
+    ) {
+      writeAggregateCache(
+        combinedJobs,
+        source
+      )
     }
-    return collected
-  } catch (err) {
-    console.warn('[jobEngine] fetchCachedJSearchJobs failed:', err)
-    return []
+
+    if (DEBUG_JOB_ENGINE) {
+      console.group(
+        '[jobEngine] Source Summary'
+      )
+
+      results.forEach(
+        (
+          result,
+          index
+        ) => {
+          const count =
+            result.status ===
+              'fulfilled' &&
+            Array.isArray(
+              result.value
+            )
+              ? result.value.length
+              : 0
+
+          console.log(
+            sources[index].name,
+            {
+              status:
+                result.status,
+              jobs: count,
+            }
+          )
+        }
+      )
+
+      console.log(
+        'Raw jobs:',
+        rawJobs.length
+      )
+
+      console.log(
+        'Final jobs:',
+        combinedJobs.length
+      )
+
+      console.log(
+        'Source:',
+        source
+      )
+
+      console.groupEnd()
+    }
+
+    return {
+      jobs: combinedJobs,
+      source,
+    }
   }
-}
 
-export const mergeJobs = (jobs: Job[]): Job[] => {
-  const seen = new Map<string, Job>()
-  for (const rawJob of jobs) {
-    const normalized = normalizeJob(rawJob as Job & { source?: string })
-    const key = normalizeJobKey(normalized)
-    if (!seen.has(key)) {
-      seen.set(key, normalized)
-    }
-  }
-  return Array.from(seen.values())
-}
+/* -------------------------------------------------------------------------- */
+/* PUBLIC API                                                                 */
+/* -------------------------------------------------------------------------- */
 
-export async function getFastJobsFromEngine(): Promise<{ jobs: Job[]; source: string }> {
+export async function getFastJobsFromEngine(): Promise<{
+  jobs: Job[]
+  source: string
+}> {
   return getJobsFromEngine()
 }
 
-export async function getJobsFromEngine(): Promise<{ jobs: Job[]; source: string }> {
-  const sources = [
-    { name: 'firebase', promise: safeFetchCustomJobs() },
-    { name: 'rozee', promise: safeFetchRozeeCached() },
-    { name: 'remotive', promise: safeFetchRemotiveJobs() },
-    { name: 'arbeitnow', promise: safeFetchArbeitnowJobs() },
-    { name: 'jobicy', promise: safeFetchJobicyJobs() },
-    { name: 'jsearch', promise: fetchCachedJSearchJobs() },
-  ]
-
-  const results = await Promise.allSettled(sources.map((source) => source.promise))
-  const rawJobs: Job[] = pakistanJobs.map((job) => ({ ...(job as any), source: 'local' }))
-  const sourceParts = new Set<string>(['local'])
-
-  results.forEach((result, index) => {
-    if (result.status !== 'fulfilled' || !Array.isArray(result.value)) return
-    const sourceName = sources[index].name
-    if (result.value.length > 0) {
-      sourceParts.add(sourceName)
-    }
-    result.value.forEach((job) => rawJobs.push({ ...(job as any), source: sourceName }))
-  })
-
-  let combinedJobs = mergeJobs(rawJobs)
-  if (combinedJobs.length < 100) {
-    combinedJobs = mergeJobs([...pakistanJobs.map((job) => ({ ...(job as any), source: 'local' })), ...combinedJobs])
+export async function getJobsFromEngine(): Promise<{
+  jobs: Job[]
+  source: string
+}> {
+  /*
+   * Prevent multiple simultaneous engine executions.
+   */
+  if (inFlightRequest) {
+    return inFlightRequest
   }
 
-  if (combinedJobs.length < 20) {
-    clearSessionCaches()
-  }
+  inFlightRequest =
+    loadAllSources()
 
-  return {
-    jobs: combinedJobs,
-    source: Array.from(sourceParts).join('+'),
+  try {
+    return await inFlightRequest
+  } finally {
+    inFlightRequest = null
   }
 }
-
