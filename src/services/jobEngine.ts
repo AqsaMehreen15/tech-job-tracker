@@ -1682,6 +1682,19 @@ const loadAllSources =
      * One failure must NOT kill the others.
      */
     const sources = [
+      /*
+       * Local Pakistan/regional jobs are always part of the
+       * aggregation so they appear alongside live sources,
+       * not only as a last-resort fallback.
+       */
+      {
+        name: 'local',
+        promise:
+          Promise.resolve(
+            pakistanJobs
+          ),
+      },
+
       {
         name: 'firebase',
         promise:
