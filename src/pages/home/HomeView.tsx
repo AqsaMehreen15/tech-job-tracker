@@ -108,8 +108,10 @@ export const HomeView: React.FC<HomeViewProps> = ({
     select: {
       padding: '10px 12px',
       borderRadius: 8,
-      border: '1px solid #e6e9ef',
-      background: '#fff',
+      border: '1px solid rgba(148, 163, 184, 0.16)',
+      background: 'rgba(15, 23, 42, 0.9)',
+      color: '#e2e8f0',
+      colorScheme: 'dark' as const,
       cursor: 'pointer',
     },
 

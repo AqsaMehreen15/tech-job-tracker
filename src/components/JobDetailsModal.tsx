@@ -95,7 +95,7 @@ export const JobDetailsModal: React.FC<Props> = ({ isOpen, onClose, job, onApply
     'Performance bonuses and annual reviews',
   ]
 
-  const jobTypeLabel = (type: string) => {
+  const jobTypeLabel = (type?: string) => {
     if (!type) return '—'
     const t = type.toLowerCase()
     if (t.includes('intern')) return 'Internship'
