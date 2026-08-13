@@ -47,7 +47,7 @@ const DEBUG_JOB_ENGINE =
   'true'
 
 const AGGREGATE_CACHE_KEY =
-  'jobEngine_aggregate_v2'
+  'jobEngine_aggregate_v4'
 
 /* -------------------------------------------------------------------------- */
 /* HELPERS                                                                    */
@@ -90,32 +90,283 @@ const normalizeText = (
     .replace(/[-_]+/g, ' ')
     .replace(/\s+/g, ' ')
 
+const coalesceString = (
+  ...values: unknown[]
+): string => {
+  for (const value of values) {
+    if (value == null) {
+      continue
+    }
+
+    if (Array.isArray(value)) {
+      const joined =
+        value
+          .map((entry) =>
+            String(entry ?? '').trim()
+          )
+          .filter(Boolean)
+          .join(', ')
+
+      if (joined) {
+        return joined
+      }
+
+      continue
+    }
+
+    const text =
+      String(value).trim()
+
+    if (text) {
+      return text
+    }
+  }
+
+  return ''
+}
+
+const PLACEHOLDER_TITLES =
+  new Set([
+    '',
+    'job',
+    'untitled',
+    'n a',
+    'na',
+    'none',
+    'unknown',
+    'tbd',
+  ])
+
+/*
+ * Multi-word placeholder titles that some job APIs return when the
+ * underlying source data is incomplete (e.g. JSearch, Remotive).
+ *
+ * normalizeText() collapses whitespace and converts dashes/underscores
+ * to spaces, so "Unknown Job" becomes "unknown job".
+ */
+const PLACEHOLDER_TITLE_PHRASES =
+  new Set([
+    'unknown job',
+    'unknown job title',
+    'job title unknown',
+    'untitled job',
+    'no title',
+    'not available',
+    'not specified',
+    'to be determined',
+  ])
+
+/*
+ * Placeholder values that some job APIs use for company, location,
+ * category or job type when the underlying data is missing.
+ */
+const PLACEHOLDER_VALUES =
+  new Set([
+    '',
+    'unknown',
+    'n a',
+    'na',
+    'none',
+    'not available',
+    'not specified',
+    'tbd',
+    'to be determined',
+  ])
+
+const isPlaceholderValue = (
+  value?: unknown
+): boolean => {
+  const normalized =
+    normalizeText(value)
+
+  return PLACEHOLDER_VALUES.has(
+    normalized
+  )
+}
+
+const isMeaningfulTitle = (
+  value?: unknown
+): boolean => {
+  const title =
+    String(value ?? '').trim()
+
+  if (title.length < 2) {
+    return false
+  }
+
+  const normalized =
+    normalizeText(title)
+
+  if (
+    PLACEHOLDER_TITLES.has(
+      normalized
+    )
+  ) {
+    return false
+  }
+
+  return !PLACEHOLDER_TITLE_PHRASES.has(
+    normalized
+  )
+}
+
+const logSourceDataQuality = (
+  sourceName: string,
+  rawItems: unknown[],
+  mappedJobs: Job[]
+): void => {
+  if (!DEBUG_JOB_ENGINE) {
+    return
+  }
+
+  let missingTitle = 0
+  let missingCompany = 0
+  let missingLocation = 0
+  const malformedSamples: unknown[] =
+    []
+
+  mappedJobs.forEach(
+    (job, index) => {
+      const raw =
+        rawItems[index] as Record<
+          string,
+          unknown
+        > | undefined
+
+      const rawTitle =
+        coalesceString(
+          raw?.title,
+          raw?.jobTitle,
+          raw?.role,
+          raw?.job_title
+        )
+
+      const rawCompany =
+        coalesceString(
+          raw?.company_name,
+          raw?.companyName,
+          raw?.company,
+          raw?.employer_name
+        )
+
+      const rawLocation =
+        coalesceString(
+          raw?.candidate_required_location,
+          raw?.jobGeo,
+          raw?.location,
+          raw?.job_city
+        )
+
+      if (!rawTitle) {
+        missingTitle++
+      }
+
+      if (!rawCompany) {
+        missingCompany++
+      }
+
+      if (!rawLocation) {
+        missingLocation++
+      }
+
+      const mappedMalformed =
+        !isMeaningfulTitle(
+          job.title
+        ) ||
+        normalizeText(
+          job.company_name
+        ) === 'unknown' ||
+        normalizeText(
+          job.candidate_required_location
+        ) === 'unknown'
+
+      if (
+        mappedMalformed &&
+        malformedSamples.length <
+          3
+      ) {
+        malformedSamples.push({
+          index,
+          raw,
+          mapped: job,
+        })
+      }
+    }
+  )
+
+  debugLog(
+    `Source quality: ${sourceName}`,
+    {
+      rawCount:
+        rawItems.length,
+      mappedCount:
+        mappedJobs.length,
+      missingTitle,
+      missingCompany,
+      missingLocation,
+      malformedSamples,
+    }
+  )
+}
+
 const normalizeJob = (
   job: Job
-): Job => {
+): Job | null => {
   const title =
-    String(job.title ?? 'Job').trim()
+    coalesceString(
+      job.title
+    ).trim()
+
+  if (
+    !isMeaningfulTitle(title)
+  ) {
+    return null
+  }
 
   const company =
-    String(
-      job.company_name ?? 'Unknown'
-    ).trim()
+    coalesceString(
+      job.company_name
+    )
 
   const location =
-    String(
-      job.candidate_required_location ??
-        (job as any).location ??
-        'Remote'
-    ).trim()
+    coalesceString(
+      job.candidate_required_location,
+      (job as any).location
+    )
+
+  const category =
+    coalesceString(
+      job.category
+    )
+
+  const job_type =
+    coalesceString(
+      job.job_type
+    )
+
+  /*
+   * Reject records that carry placeholder/empty values for
+   * company, location, category or job type.
+   *
+   * We deliberately do NOT substitute fake defaults such as
+   * "Unknown Company" or "Location not specified" — that would
+   * turn malformed API records into valid-looking Job objects.
+   */
+  if (
+    isPlaceholderValue(company) ||
+    isPlaceholderValue(location) ||
+    isPlaceholderValue(category) ||
+    isPlaceholderValue(job_type)
+  ) {
+    return null
+  }
 
   const url =
-    String(job.url ?? '').trim()
+    coalesceString(job.url)
 
   const id =
-    String(
-      job.id ??
-        `${title}-${company}-${location}-${url}`
-    ).trim()
+    coalesceString(job.id) ||
+    `${title}-${company}-${location}-${url}`
 
   return {
     ...job,
@@ -123,10 +374,14 @@ const normalizeJob = (
     title,
     company_name: company,
     candidate_required_location:
-      location || 'Remote',
+      location,
+    category,
+    job_type,
     url: url || undefined,
     company_logo:
-      String(job.company_logo ?? '').trim(),
+      coalesceString(
+        job.company_logo
+      ) || undefined,
   }
 }
 
@@ -179,7 +434,7 @@ export const mergeJobs = (
     /*
      * Ignore completely invalid records.
      */
-    if (!job.title) {
+    if (!job) {
       continue
     }
 
@@ -443,7 +698,7 @@ const safeFetchCustomJobs =
 const safeFetchRemotiveJobs =
   async (): Promise<Job[]> => {
     const cacheKey =
-      'jobEngine_cache_remotive_v2'
+      'jobEngine_cache_remotive_v3'
 
     const cached =
       readSourceCache(cacheKey)
@@ -483,37 +738,54 @@ const safeFetchRemotiveJobs =
               `${item.title}-${item.company_name}`,
 
             title:
-              item.title ??
-              'Job',
+              coalesceString(
+                item.title
+              ),
 
             company_name:
-              item.company_name ??
-              'Unknown',
+              coalesceString(
+                item.company_name,
+                item.company
+              ),
 
             candidate_required_location:
-              item.candidate_required_location ??
-              item.location ??
-              'Remote',
+              coalesceString(
+                item.candidate_required_location,
+                item.location,
+                'Remote'
+              ),
 
             url:
-              item.url ??
-              item.apply_url,
+              coalesceString(
+                item.url,
+                item.apply_url
+              ),
 
             publication_date:
-              item.publication_date ??
-              item.created_at,
+              coalesceString(
+                item.publication_date,
+                item.created_at
+              ),
 
             description:
-              item.description,
+              coalesceString(
+                item.description
+              ),
 
             category:
-              item.category,
+              coalesceString(
+                item.category
+              ),
 
             job_type:
-              item.job_type,
+              coalesceString(
+                item.job_type
+              ),
 
             company_logo:
-              item.company_logo,
+              coalesceString(
+                item.company_logo
+              ),
 
             tags:
               Array.isArray(item.tags)
@@ -521,6 +793,12 @@ const safeFetchRemotiveJobs =
                 : undefined,
           })
         )
+
+      logSourceDataQuality(
+        'remotive',
+        items,
+        jobs
+      )
 
       const normalized =
         mergeJobs(jobs)
@@ -548,7 +826,7 @@ const safeFetchRemotiveJobs =
 const safeFetchArbeitnowJobs =
   async (): Promise<Job[]> => {
     const cacheKey =
-      'jobEngine_cache_arbeitnow_v2'
+      'jobEngine_cache_arbeitnow_v3'
 
     const cached =
       readSourceCache(cacheKey)
@@ -589,51 +867,65 @@ const safeFetchArbeitnowJobs =
               `${item.title}-${item.company_name}`,
 
             title:
-              item.title ??
-              'Job',
+              coalesceString(
+                item.title
+              ),
 
             company_name:
-              item.company_name ??
-              item.company ??
-              'Unknown',
+              coalesceString(
+                item.company_name,
+                item.company
+              ),
 
             candidate_required_location:
-              item.location ??
-              (
+              coalesceString(
+                item.location,
                 item.remote
                   ? 'Remote'
-                  : 'Unknown'
+                  : ''
               ),
 
             url:
-              item.url ??
-              item.redirect_url ??
-              item.job_ad_link,
+              coalesceString(
+                item.url,
+                item.redirect_url,
+                item.job_ad_link
+              ),
 
             publication_date:
-              item.created_at ??
-              item.publication_date,
+              coalesceString(
+                item.created_at,
+                item.publication_date
+              ),
 
             description:
-              item.description ??
-              item.details,
+              coalesceString(
+                item.description,
+                item.details
+              ),
 
             category:
-              item.job_type ??
-              '',
+              coalesceString(
+                item.job_type
+              ),
 
             job_type:
-              Array.isArray(
-                item.job_types
-              )
-                ? item.job_types.join(
-                    ', '
-                  )
-                : item.job_type ??
-                  item.employment_type,
+              coalesceString(
+                Array.isArray(
+                  item.job_types
+                )
+                  ? item.job_types.join(
+                      ', '
+                    )
+                  : item.job_types,
+                item.job_type,
+                item.employment_type
+              ),
 
             company_logo:
-              item.company_logo,
+              coalesceString(
+                item.company_logo
+              ),
 
             tags:
               Array.isArray(item.tags)
@@ -644,6 +936,12 @@ const safeFetchArbeitnowJobs =
                 : undefined,
           })
         )
+
+      logSourceDataQuality(
+        'arbeitnow',
+        items,
+        jobs
+      )
 
       const normalized =
         mergeJobs(jobs)
@@ -671,7 +969,7 @@ const safeFetchArbeitnowJobs =
 const safeFetchJobicyJobs =
   async (): Promise<Job[]> => {
     const cacheKey =
-      'jobEngine_cache_jobicy_v2'
+      'jobEngine_cache_jobicy_v4'
 
     const cached =
       readSourceCache(cacheKey)
@@ -713,54 +1011,90 @@ const safeFetchJobicyJobs =
             id:
               item.id ??
               item.uuid ??
-              `${item.title}-${item.company_name}`,
+              `${item.jobTitle ?? item.title}-${item.companyName ?? item.company_name}`,
 
             title:
-              item.title ??
-              item.role ??
-              'Job',
+              coalesceString(
+                item.jobTitle,
+                item.title,
+                item.role
+              ),
 
             company_name:
-              item.company_name ??
-              item.company ??
-              item.employer_name ??
-              'Unknown',
+              coalesceString(
+                item.companyName,
+                item.company_name,
+                item.company,
+                item.employer_name
+              ),
 
             candidate_required_location:
-              item.location ??
-              item.candidate_required_location ??
-              (
+              coalesceString(
+                item.jobGeo,
+                item.location,
+                item.candidate_required_location,
                 item.remote
                   ? 'Remote'
-                  : 'Unknown'
+                  : ''
               ),
 
             url:
-              item.url ??
-              item.apply_url ??
-              item.job_url ??
-              item.link,
+              coalesceString(
+                item.url,
+                item.apply_url,
+                item.job_url,
+                item.link
+              ),
 
             publication_date:
-              item.created_at ??
-              item.posted_at ??
-              item.publication_date,
+              coalesceString(
+                item.pubDate,
+                item.created_at,
+                item.posted_at,
+                item.publication_date
+              ),
 
             description:
-              item.description ??
-              item.summary,
+              coalesceString(
+                item.jobDescription,
+                item.description,
+                item.summary,
+                item.jobExcerpt
+              ),
 
             category:
-              item.category ??
-              item.job_category,
+              coalesceString(
+                Array.isArray(
+                  item.jobIndustry
+                )
+                  ? item.jobIndustry.join(
+                      ', '
+                    )
+                  : item.jobIndustry,
+                item.jobCategory,
+                item.category,
+                item.job_category
+              ),
 
             job_type:
-              item.job_type ??
-              item.employment_type ??
-              item.type,
+              coalesceString(
+                Array.isArray(
+                  item.jobType
+                )
+                  ? item.jobType.join(
+                      ', '
+                    )
+                  : item.jobType,
+                item.job_type,
+                item.employment_type,
+                item.type
+              ),
 
             company_logo:
-              item.company_logo,
+              coalesceString(
+                item.companyLogo,
+                item.company_logo
+              ),
 
             tags:
               Array.isArray(item.tags)
@@ -780,6 +1114,12 @@ const safeFetchJobicyJobs =
                 : undefined,
           })
         )
+
+      logSourceDataQuality(
+        'jobicy',
+        items,
+        jobs
+      )
 
       const normalized =
         mergeJobs(jobs)
@@ -807,7 +1147,7 @@ const safeFetchJobicyJobs =
 const safeFetchRozeeJobs =
   async (): Promise<Job[]> => {
     const cacheKey =
-      'jobEngine_cache_rozee_v2'
+      'jobEngine_cache_rozee_v3'
 
     const cached =
       readSourceCache(cacheKey)
@@ -1033,48 +1373,70 @@ const fetchCachedJSearchJobs =
               `${item.job_title}-${item.employer_name}`,
 
             title:
-              item.job_title ??
-              item.title ??
-              'Job',
+              coalesceString(
+                item.job_title,
+                item.title
+              ),
 
             company_name:
-              item.employer_name ??
-              item.company_name ??
-              item.company ??
-              'Unknown',
+              coalesceString(
+                item.employer_name,
+                item.company_name,
+                item.company
+              ),
 
             candidate_required_location:
-              item.job_city ??
-              item.job_state ??
-              item.job_country ??
-              item.location ??
-              'Remote',
+              coalesceString(
+                item.job_city,
+                item.job_state,
+                item.job_country,
+                item.location,
+                'Remote'
+              ),
 
             url:
-              item.job_apply_link ??
-              item.job_link ??
-              item.url,
+              coalesceString(
+                item.job_apply_link,
+                item.job_link,
+                item.url
+              ),
 
             publication_date:
-              item.job_posted_at ??
-              item.publication_date,
+              coalesceString(
+                item.job_posted_at,
+                item.publication_date
+              ),
 
             description:
-              item.job_description ??
-              item.description,
+              coalesceString(
+                item.job_description,
+                item.description
+              ),
 
             category:
-              item.job_category ??
-              item.category,
+              coalesceString(
+                item.job_category,
+                item.category
+              ),
 
             job_type:
-              item.job_employment_type ??
-              item.job_type,
+              coalesceString(
+                item.job_employment_type,
+                item.job_type
+              ),
 
             company_logo:
-              item.employer_logo,
+              coalesceString(
+                item.employer_logo
+              ),
           })
         )
+
+      logSourceDataQuality(
+        'jsearch',
+        rawItems,
+        jobs
+      )
 
       const normalized =
         mergeJobs(jobs)
